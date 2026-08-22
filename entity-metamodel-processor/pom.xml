@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.github.vadimbabich</groupId>
+    <artifactId>entity-metamodel-parent</artifactId>
+    <version>2.0.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>entity-metamodel-processor</artifactId>
+
+  <name>Entity Metamodel Processor</name>
+  <description>
+    JSR-269 annotation processor: reads Spring Data Relational entities through javax.lang.model and
+    emits one metamodel per entity in the frozen contract shape. Compile-time only — it never
+    reaches a consumer's runtime classpath, and it declares no third-party dependency: the emitter
+    renders source text itself because the shape's member order is fixed by contract and no
+    general-purpose code-generation library can be told to honour it.
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>io.github.vadimbabich</groupId>
+      <artifactId>entity-metamodel-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <!-- Test scope only, in both cases: the fixtures the processor is compiled against carry
+         Spring's mapping annotations, and their generated metamodels are compiled against the
+         runtime jar to prove the emitted source is real, not merely byte-equal. -->
+    <dependency>
+      <groupId>io.github.vadimbabich</groupId>
+      <artifactId>entity-metamodel-runtime</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.data</groupId>
+      <artifactId>spring-data-relational</artifactId>
+      <version>${spring-data-relational.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <version>${assertj-core.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <release>${java.release}</release>
+          <compilerArgs>
+            <arg>-Xlint:all</arg>
+          </compilerArgs>
+          <failOnWarning>true</failOnWarning>
+          <!-- This module's own sources must not be run through any processor found on the
+               classpath, including this one. -->
+          <proc>none</proc>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <!-- The tests run javac in-process. Surefire's manifest-only jar hides the real
+               classpath from the compiler, so fixtures would fail to resolve Spring and the
+               runtime jar. -->
+          <useManifestOnlyJar>false</useManifestOnlyJar>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <configuration>
+          <archive>
+            <manifestEntries>
+              <Automatic-Module-Name>io.github.vadimbabich.entitymetamodel.processor</Automatic-Module-Name>
+            </manifestEntries>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
+</project>

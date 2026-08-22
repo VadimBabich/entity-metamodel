@@ -6,7 +6,8 @@ import java.util.List;
  * An exact declared Java type, carried verbatim — the fidelity that makes a generated
  * {@code PropertyRef<E,T>} type argument usable rather than decorative.
  */
-public record TypeRef(String qualifiedName, List<TypeRef> typeArguments, int arrayDimensions) {
+public record TypeRef(String qualifiedName, List<TypeArgument> typeArguments, int arrayDimensions)
+    implements TypeArgument {
 
   public TypeRef {
     requireText(qualifiedName, "qualifiedName");
@@ -20,8 +21,9 @@ public record TypeRef(String qualifiedName, List<TypeRef> typeArguments, int arr
     return new TypeRef(qualifiedName, List.of(), 0);
   }
 
-  public static TypeRef parameterized(String qualifiedName, List<TypeRef> typeArguments) {
-    return new TypeRef(qualifiedName, typeArguments, 0);
+  public static TypeRef parameterized(
+      String qualifiedName, List<? extends TypeArgument> typeArguments) {
+    return new TypeRef(qualifiedName, List.copyOf(typeArguments), 0);
   }
 
   public static TypeRef array(TypeRef componentType, int dimensions) {
@@ -31,7 +33,7 @@ public record TypeRef(String qualifiedName, List<TypeRef> typeArguments, int arr
         componentType.qualifiedName(), componentType.typeArguments(), totalDimensions);
   }
 
-  /** Renders the declared type as Java source text, e.g. {@code java.util.List<java.lang.String>}. */
+  @Override
   public String canonical() {
     StringBuilder rendered = new StringBuilder(qualifiedName);
 

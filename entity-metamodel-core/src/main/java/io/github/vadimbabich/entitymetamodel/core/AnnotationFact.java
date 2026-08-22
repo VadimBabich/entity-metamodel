@@ -1,5 +1,6 @@
 package io.github.vadimbabich.entitymetamodel.core;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -15,6 +16,12 @@ public record AnnotationFact(String qualifiedName, Map<String, String> declaredV
 
   public static AnnotationFact of(String qualifiedName, Map<String, String> declaredValues) {
     return new AnnotationFact(qualifiedName, declaredValues);
+  }
+
+  /** Whether the list carries this annotation, matched on the qualified name. */
+  public static boolean presentIn(List<AnnotationFact> annotations, String qualifiedName) {
+    return annotations.stream()
+        .anyMatch(annotation -> annotation.qualifiedName().equals(qualifiedName));
   }
 
   public String simpleName() {

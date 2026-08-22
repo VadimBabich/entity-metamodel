@@ -4,16 +4,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 import io.github.vadimbabich.entitymetamodel.runtime.fixtures.Account;
+import io.github.vadimbabich.entitymetamodel.runtime.fixtures.Child;
+import io.github.vadimbabich.entitymetamodel.runtime.fixtures.Invoice;
+import io.github.vadimbabich.entitymetamodel.runtime.fixtures.Parent;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.mapping.model.SimpleTypeHolder;
 import org.springframework.data.relational.core.mapping.NamingStrategy;
 import org.springframework.data.relational.core.mapping.RelationalMappingContext;
 import org.springframework.data.relational.core.mapping.RelationalPersistentProperty;
 
 /**
- * Resolution delegates to Spring's mapping context: SQL names are never re-implemented and no name
- * is ever baked into a ref. With no component and no static state, context isolation reduces to
- * plain values answering only for the context they were handed.
+ * Resolution delegates to Spring's mapping context: SQL names are never re-implemented and never
+ * baked into a ref. With no static state, a ref answers only for the context it was handed.
  */
 class MappingContextResolutionTest {
 
@@ -60,6 +65,54 @@ class MappingContextResolutionTest {
         .isThrownBy(() -> bogus.columnName(mappingContext))
         .withMessageContaining("nope")
         .withMessageContaining("Account");
+  }
+
+  @Test
+  void aRelationshipPropertyFailsFastInsteadOfNamingAColumnThatDoesNotExist() {
+    RelationalMappingContext mappingContext = new RelationalMappingContext();
+
+    // Both are persistent, so the unknown-property guard does not fire — but neither is a column of
+    // the parent's table.
+    assertThatIllegalArgumentException()
+        .isThrownBy(() -> EntityRef.of(Parent.class)
+            .property("children", List.class).columnName(mappingContext))
+        .withMessageContaining("children")
+        .withMessageContaining("Parent");
+    assertThatIllegalArgumentException()
+        .isThrownBy(() -> EntityRef.of(Parent.class)
+            .property("soleChild", Child.class).columnName(mappingContext))
+        .withMessageContaining("soleChild");
+  }
+
+  @Test
+  void aConvertedValueTypeResolvesOnceTheContextKnowsItAsASimpleType() {
+    RelationalMappingContext unwired = new RelationalMappingContext();
+    PropertyRef<Invoice, Invoice.Money> refund =
+        EntityRef.of(Invoice.class).property("refund", Invoice.Money.class);
+
+    // One column or another aggregate is the context's answer, so the refusal says what changes it.
+    assertThatIllegalArgumentException()
+        .isThrownBy(() -> refund.columnName(unwired))
+        .withMessageContaining("simple type");
+
+    RelationalMappingContext wired = new RelationalMappingContext();
+    wired.setSimpleTypeHolder(new SimpleTypeHolder(Set.of(Invoice.Money.class), true));
+
+    assertThat(refund.columnName(wired)).isEqualTo("refund");
+  }
+
+  @Test
+  void anEmbeddedPropertyIsRefusedAsAnEmbeddedValueNotAsARelationship() {
+    RelationalMappingContext mappingContext = new RelationalMappingContext();
+
+    // The context calls an embedded value an entity too, but its columns are in this table, so a
+    // referenced-table answer would be confidently wrong.
+    assertThatIllegalArgumentException()
+        .isThrownBy(() -> EntityRef.of(Invoice.class)
+            .property("total", Invoice.Money.class).columnName(mappingContext))
+        .withMessageContaining("total")
+        .withMessageContaining("embedded")
+        .withMessageNotContaining("referenced table");
   }
 
   @Test

@@ -18,13 +18,9 @@
     mutable state — consumers wire one executor bean themselves (D3).
   </description>
 
-  <properties>
+  <dependencies>
     <!-- The dependency surface is deliberate: the resolution core is RELATIONAL-ONLY.
          spring-data-r2dbc belongs to the execution module, never here. -->
-    <spring-data-relational.version>3.5.12</spring-data-relational.version>
-  </properties>
-
-  <dependencies>
     <dependency>
       <groupId>org.springframework.data</groupId>
       <artifactId>spring-data-relational</artifactId>

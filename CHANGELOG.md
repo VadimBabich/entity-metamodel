@@ -2,13 +2,37 @@
 
 ## Unreleased
 
-The `entity-metamodel` family — `core`, `runtime` and a BOM — is built in this repository and
-**not published**. It holds the model vocabulary and the reference types (`EntityRef`,
-`PropertyRef`, `JoinRef`) that generated code will compile against, plus the owned `@Generated` and
-`@RawSql` markers.
+The `entity-metamodel` family — `core`, `runtime`, `processor` and a BOM — is built in this
+repository and **not published**. It holds the model vocabulary, the reference types (`EntityRef`,
+`PropertyRef`, `JoinRef`) that generated code compiles against, the owned `@Generated` and
+`@RawSql` markers, and the annotation processor that generates metamodels.
 
-Nothing generates or executes yet. The first publication will be the version where it does, rather
-than a milestone of parts — see [`ROADMAP.md`](ROADMAP.md).
+**`entity-metamodel-processor` generates.** It reads `@Table` types through `javax.lang.model`
+rather than by parsing sources — discovery needs the `@Table` annotation itself, since the compiler
+does not present types annotated with a stereotype composed over it, though such a type *is*
+recognised as an entity when another entity refers to it — and emits one metamodel per entity: inherited members flattened
+into the entity and re-anchored there, nested entities mirrored as nested metamodels, exact
+declared types — generics, arrays, bounded wildcards — carried into the ref type arguments, and
+members ordered by name so the output does not depend on the compiler. Inclusion follows Spring's
+persistent-property rules, with `entitymetamodel.requireColumnAnnotation` as the strictness opt-in.
+It declares no third-party dependency, and registers in the *isolating* category so a build tool can
+regenerate one file rather than all of them — asserted by a test, and measured end to end on Gradle:
+editing a supertype regenerates the metamodels that inherit from it, editing an entity keeps its
+inherited members, and editing nothing recompiles nothing. Every member it cannot express yet — embedded values, references to
+other aggregates, generic entity types — is reported instead of dropped in silence, and a member
+name that two properties would share is an error rather than a duplicate field. A member is
+recognised as a relationship when the type it refers to is itself a mapped entity — not by
+`@MappedCollection`, which Spring treats as optional. Whether any other non-simple type is one
+column or another aggregate depends on the converters a context registers, so that answer comes from
+the context at resolution time. A committed corpus of golden files holds the output byte-for-byte on JDK 17, 21 and 25.
+
+`PropertyRef.columnName` now refuses a relationship property instead of returning a column name the
+table does not have. Whether a given value type is one column or another aggregate depends on the
+converters registered on the mapping context, so the answer comes from the context at resolution
+time rather than from a guess at generation time.
+
+Nothing executes queries yet. The first publication will be the version that does, rather than a
+milestone of parts — see [`ROADMAP.md`](ROADMAP.md).
 
 ## 1.1.0 — 2026-08-15
 
