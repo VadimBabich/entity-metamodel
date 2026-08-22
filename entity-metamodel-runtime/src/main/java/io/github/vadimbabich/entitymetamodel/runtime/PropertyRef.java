@@ -42,45 +42,69 @@ public final class PropertyRef<E, T> {
     return new PropertyRef<>(instance, propertyName, declaredRawType);
   }
 
-  @SuppressWarnings("unused")
   public Predicate is(T value) {
-    throw new UnsupportedOperationException("Predicate building requires the r2dbc module");
+    return (Predicate) invokeFactory("equal", this, value);
   }
 
   @SafeVarargs
-  @SuppressWarnings("unused")
   public final Predicate in(T... values) {
-    throw new UnsupportedOperationException("Predicate building requires the r2dbc module");
+    @SuppressWarnings("varargs")
+    Object[] safeValues = values;
+    return (Predicate) invokeFactory("in", this, safeValues);
   }
 
-  @SuppressWarnings("unused")
   public Predicate isNull() {
-    throw new UnsupportedOperationException("Predicate building requires the r2dbc module");
+    return (Predicate) invokeFactory("isNull", this);
   }
 
-  @SuppressWarnings("unused")
   public Predicate gt(T value) {
-    throw new UnsupportedOperationException("Predicate building requires the r2dbc module");
+    return (Predicate) invokeFactory("greaterThan", this, value);
   }
 
-  @SuppressWarnings("unused")
   public Predicate gte(T value) {
-    throw new UnsupportedOperationException("Predicate building requires the r2dbc module");
+    return (Predicate) invokeFactory("greaterThanOrEqual", this, value);
   }
 
-  @SuppressWarnings("unused")
   public Predicate lt(T value) {
-    throw new UnsupportedOperationException("Predicate building requires the r2dbc module");
+    return (Predicate) invokeFactory("lessThan", this, value);
   }
 
-  @SuppressWarnings("unused")
   public Predicate lte(T value) {
-    throw new UnsupportedOperationException("Predicate building requires the r2dbc module");
+    return (Predicate) invokeFactory("lessThanOrEqual", this, value);
   }
 
-  @SuppressWarnings("unused")
   public Predicate like(T pattern) {
-    throw new UnsupportedOperationException("Predicate building requires the r2dbc module");
+    return (Predicate) invokeFactory("like", this, pattern);
+  }
+
+  private static Object invokeFactory(String operator, Object... args) {
+    try {
+      Class<?> factoryClass = loadFactoryClass();
+      Object factory = factoryClass.getMethod("getInstance").invoke(null);
+
+      return factoryClass.getMethod("build", String.class, PropertyRef.class, Object[].class)
+          .invoke(factory, operator, args[0], java.util.Arrays.copyOfRange(args, 1, args.length));
+    } catch (ReflectiveOperationException e) {
+      throw new UnsupportedOperationException("Predicate building requires the r2dbc module", e);
+    }
+  }
+
+  private static Class<?> loadFactoryClass() throws ReflectiveOperationException {
+    String factoryClassName = "io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ConditionFactory";
+
+    try {
+      return Class.forName(factoryClassName);
+    } catch (ClassNotFoundException e1) {
+      try {
+        return Class.forName(factoryClassName, true, PropertyRef.class.getClassLoader());
+      } catch (ClassNotFoundException e2) {
+        try {
+          return Class.forName(factoryClassName, true, Thread.currentThread().getContextClassLoader());
+        } catch (ClassNotFoundException e3) {
+          throw new ClassNotFoundException(factoryClassName + " not found on any class loader");
+        }
+      }
+    }
   }
 
   /**
