@@ -26,26 +26,38 @@ public final class FluentSelect<E> {
   }
 
   public Flux<E> all() {
-    throw new UnsupportedOperationException("Terminal: all() not yet implemented");
+    return Flux.error(
+        new UnsupportedOperationException(
+            "Query execution requires QueryExecutor and R2DBC integration"));
   }
 
   public Mono<E> one() {
-    throw new UnsupportedOperationException("Terminal: one() not yet implemented");
+    return Mono.error(
+        new UnsupportedOperationException(
+            "Query execution requires QueryExecutor and R2DBC integration"));
   }
 
   public Mono<E> first() {
-    throw new UnsupportedOperationException("Terminal: first() not yet implemented");
+    return Mono.error(
+        new UnsupportedOperationException(
+            "Query execution requires QueryExecutor and R2DBC integration"));
   }
 
   public Mono<List<E>> list() {
-    throw new UnsupportedOperationException("Terminal: list() not yet implemented");
+    return Mono.error(
+        new UnsupportedOperationException(
+            "Query execution requires QueryExecutor and R2DBC integration"));
   }
 
   public Mono<Long> count() {
-    throw new UnsupportedOperationException("Terminal: count() not yet implemented");
+    return Mono.error(
+        new UnsupportedOperationException(
+            "Query execution requires QueryExecutor and R2DBC integration"));
   }
 
   public Mono<Boolean> exists() {
-    throw new UnsupportedOperationException("Terminal: exists() not yet implemented");
+    return Mono.error(
+        new UnsupportedOperationException(
+            "Query execution requires QueryExecutor and R2DBC integration"));
   }
 }
