@@ -11,7 +11,7 @@ generates code today.
 | | What it is | Where to get it | State |
 |---|---|---|---|
 | **`jpa-metadata-maven-plugin`** | Maven plugin that parses your entity sources and generates metamodels. The working generator. | [build from source](#building-the-plugin) | 1.x, in use |
-| **`entity-metamodel-core`**, **`-runtime`**, **`-bom`** | The vocabulary and reference types the replacement generates against. | [in this repository](#the-2x-family) | built, unpublished; generates nothing yet |
+| **`entity-metamodel-core`**, **`-runtime`**, **`-processor`**, **`-bom`** | The replacement: an annotation processor plus the vocabulary and reference types it generates against. | [in this repository](#the-2x-family) | built, unpublished |
 
 If you want type-safe column references working in your project today, you want the plugin, and the
 [five-minute walkthrough](#five-minutes). If you're here to see where this is going, start with
@@ -178,15 +178,22 @@ picks them up after a reimport. If IntelliJ hasn't, right-click
 
 ## The 2.x family
 
-Two artifacts are built in this repository and not published. They are the vocabulary the
-replacement is made of — worth reading if you want to see the shape before it ships, not something
-to depend on yet.
+Three artifacts are built in this repository and not published — worth reading if you want to see
+the shape before it ships, not something to depend on yet.
 
 - **`entity-metamodel-core`** — the model a generator reads and emitters write against:
-  `EntityModel`, `EntityDescriptor`, `AttributeDescriptor`, `TypeRef` and friends. No dependencies
-  at all.
-- **`entity-metamodel-runtime`** — the types generated metamodels will compile against, plus the
+  `EntityModel`, `EntityDescriptor`, `AttributeDescriptor`, `TypeRef` and friends, plus the
+  generation SPI. No dependencies at all.
+- **`entity-metamodel-runtime`** — the types generated metamodels compile against, plus the
   owned `@Generated` and `@RawSql` markers. Depends only on `spring-data-relational`.
+- **`entity-metamodel-processor`** — the annotation processor. It reads types annotated
+  `@Table` — the annotation itself, not a stereotype composed over it, which the compiler cannot
+  hand to a processor — through `javax.lang.model`, and emits one metamodel per entity: inherited members flattened in, nested
+  entities mirrored, exact declared types carried into the ref type arguments. Compile-time only,
+  declares no third-party dependency, and registered in the *isolating* category — so an incremental
+  build regenerates a single metamodel instead of all of them, including when the edit was to a
+  supertype the entity inherits members from. Its output is held
+  byte-for-byte against a committed corpus of golden files on every build.
 
 A reference is held by hand and resolved through Spring's mapping context — the same trick `Column_`
 does in 1.x, without the split packages:
@@ -205,17 +212,18 @@ can still change; there is no compatibility promise until the first release.
 ## Where it's going
 
 The replacement is a JSR-269 annotation processor instead of source parsing: build-tool neutral,
-incremental-aware, and emitting only into your own packages. The processor, the R2DBC execution
-module and the fluent query surface are designed and being built.
+incremental-aware, and emitting only into your own packages. The processor generates the frozen
+shape today; the R2DBC execution module and the fluent query surface are designed and being built.
 
 **Nothing goes to Maven Central until it generates code.** Publishing a milestone of parts would
 spend version numbers on artifacts nobody can use, and Maven Central is permanent — so the first
 release will be one you can actually run.
 
-The 1.x plugin is maintained through the transition and retired in stages once the processor produces
-the same output — the two generations are held byte-identical by a committed golden corpus until
-then. [`ROADMAP.md`](ROADMAP.md) has the order of work; [`CHANGELOG.md`](CHANGELOG.md) has what
-actually shipped.
+The 1.x plugin is maintained through the transition and retired in stages. The two generations emit
+different shapes — that is the point, since 1.x emits into Spring's own packages — and each shape is
+pinned by its own committed corpus of golden files, so neither drifts while both exist.
+[`ROADMAP.md`](ROADMAP.md) has the order of work; [`CHANGELOG.md`](CHANGELOG.md) has what actually
+shipped.
 
 ## Building the plugin
 

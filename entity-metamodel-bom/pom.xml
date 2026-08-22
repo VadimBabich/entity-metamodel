@@ -15,7 +15,7 @@
   <description>
     Dependency management for the entity-metamodel family — one version for every artifact in
     one aligned family, born at 2.0.0-M1. Lists only artifacts that exist;
-    annotations, runtime-r2dbc and the processor join as they land. The retiring 1.x plugin keeps
+    annotations and runtime-r2dbc join as they land. The retiring 1.x plugin keeps
     its own version line and is deliberately not part of this BOM.
   </description>
 
@@ -29,6 +29,16 @@
       <dependency>
         <groupId>io.github.vadimbabich</groupId>
         <artifactId>entity-metamodel-runtime</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.github.vadimbabich</groupId>
+        <artifactId>entity-metamodel-runtime-r2dbc</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.github.vadimbabich</groupId>
+        <artifactId>entity-metamodel-processor</artifactId>
         <version>${project.version}</version>
       </dependency>
     </dependencies>

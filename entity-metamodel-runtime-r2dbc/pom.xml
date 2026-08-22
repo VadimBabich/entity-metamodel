@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.github.vadimbabich</groupId>
+    <artifactId>entity-metamodel-parent</artifactId>
+    <version>2.0.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>entity-metamodel-runtime-r2dbc</artifactId>
+
+  <name>Entity Metamodel Runtime (R2DBC)</name>
+  <description>
+    Reactive fluent query builder for Spring Data R2DBC: FluentSelect with
+    type-safe predicates, instance-scoped aliases, bind-marker ownership, and multi-entity
+    hydration. No static mutable state; resolution via injected R2dbcEntityTemplate.
+    Supports Spring Data Relational 4.0.x–4.1.x (substrate coverage from G2 report).
+  </description>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- Manage Spring Boot dependencies for version consistency. -->
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>3.3.0</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- Resolution core sits in the relational module; this module adds r2dbc execution. -->
+    <dependency>
+      <groupId>io.github.vadimbabich</groupId>
+      <artifactId>entity-metamodel-runtime</artifactId>
+      <version>2.0.0-SNAPSHOT</version>
+    </dependency>
+
+    <!-- The execution substrate: Spring Data R2DBC. Version managed by Spring Boot BOM. -->
+    <dependency>
+      <groupId>org.springframework.data</groupId>
+      <artifactId>spring-data-r2dbc</artifactId>
+    </dependency>
+
+    <!-- Reactor for reactive streams. Managed by Spring Boot BOM. -->
+    <dependency>
+      <groupId>io.projectreactor</groupId>
+      <artifactId>reactor-core</artifactId>
+    </dependency>
+
+    <!-- Test dependencies. -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <version>${assertj-core.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>io.projectreactor</groupId>
+      <artifactId>reactor-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <release>${java.release}</release>
+          <compilerArgs>
+            <arg>-Xlint:all</arg>
+          </compilerArgs>
+          <failOnWarning>true</failOnWarning>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <configuration>
+          <archive>
+            <manifestEntries>
+              <!-- JPMS posture: stable automatic module name. -->
+              <Automatic-Module-Name>io.github.vadimbabich.entitymetamodel.runtime.r2dbc</Automatic-Module-Name>
+            </manifestEntries>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
+</project>

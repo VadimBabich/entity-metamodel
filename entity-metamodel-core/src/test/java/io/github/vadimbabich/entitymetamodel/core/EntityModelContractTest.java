@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -28,14 +29,15 @@ class EntityModelContractTest {
 
   @Test
   void attributeDeclarationOrderIsPreservedVerbatim() {
-    EntityDescriptor payment = EntityDescriptor.builder("com.example.Payment", TypeKind.RECORD)
+    EntityDescriptor payment = EntityDescriptor
+        .builder("com.example", "com.example.Payment", TypeKind.RECORD)
         .tableName("payments")
         .attribute(attribute("id", TypeRef.of("java.lang.Long"), true))
         .attribute(attribute("settledOn", TypeRef.of("java.time.LocalDate"), false))
         .attribute(attribute("amount", TypeRef.of("java.math.BigDecimal"), false))
         .build();
 
-    // Within-type order is the frontend's reading order; sorting for emission is the generator's job.
+    // Within-type order is the frontend's reading order; sorting for emission is the generator's.
     assertThat(payment.attributes())
         .extracting(AttributeDescriptor::name)
         .containsExactly("id", "settledOn", "amount");
@@ -46,7 +48,8 @@ class EntityModelContractTest {
     List<AttributeDescriptor> mutableAttributes = new ArrayList<>();
     mutableAttributes.add(attribute("id", TypeRef.of("java.lang.Long"), true));
 
-    EntityDescriptor account = EntityDescriptor.builder("com.example.Account", TypeKind.CLASS)
+    EntityDescriptor account = EntityDescriptor
+        .builder("com.example", "com.example.Account", TypeKind.CLASS)
         .tableName("accounts")
         .attributes(mutableAttributes)
         .build();
@@ -65,13 +68,13 @@ class EntityModelContractTest {
         List.of(attribute("createdBy", TypeRef.of("java.lang.String"), false)));
 
     EntityDescriptor legacyDocument =
-        EntityDescriptor.builder("com.example.LegacyDocument", TypeKind.CLASS)
+        EntityDescriptor.builder("com.example", "com.example.LegacyDocument", TypeKind.CLASS)
             .tableName("legacy_documents")
             .attribute(attribute("id", TypeRef.of("java.lang.Long"), true))
             .superType(base)
             .build();
 
-    // Own attributes stay own; contributions stay attributed to their declaring type.
+    // Contributions stay attributed to their declaring type.
     assertThat(legacyDocument.attributes()).extracting(AttributeDescriptor::name)
         .containsExactly("id");
     assertThat(legacyDocument.superTypes()).hasSize(1);
@@ -86,7 +89,8 @@ class EntityModelContractTest {
   void nestedEntitiesMirrorSourceNestingInDeclarationOrder() {
     EntityDescriptor nestedView = entity("com.example.Vendor.VendorPermissionView");
 
-    EntityDescriptor vendor = EntityDescriptor.builder("com.example.Vendor", TypeKind.CLASS)
+    EntityDescriptor vendor = EntityDescriptor
+        .builder("com.example", "com.example.Vendor", TypeKind.CLASS)
         .tableName("vendors")
         .nestedEntity(nestedView)
         .build();
@@ -95,10 +99,35 @@ class EntityModelContractTest {
   }
 
   @Test
+  void identityCarriesThePackageSoTheNestedNameChainIsUnambiguous() {
+    EntityDescriptor nestedView = EntityDescriptor
+        .builder("com.example", "com.example.Vendor.VendorPermissionView", TypeKind.RECORD)
+        .tableName("vendor_permission_views")
+        .build();
+
+    assertThat(nestedView.packageName()).isEqualTo("com.example");
+    assertThat(nestedView.simpleNameChain()).containsExactly("Vendor", "VendorPermissionView");
+    assertThat(nestedView.simpleName()).isEqualTo("VendorPermissionView");
+  }
+
+  @Test
+  void aTopLevelEntityHasASingleNameInItsChain() {
+    assertThat(entity("com.example.Account").simpleNameChain()).containsExactly("Account");
+  }
+
+  @Test
+  void aQualifiedNameOutsideItsOwnPackageIsRejected() {
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> EntityDescriptor
+            .builder("com.example", "com.other.Account", TypeKind.CLASS)
+            .build());
+  }
+
+  @Test
   void annotationFactsCarryIdentityAndDeclaredValues() {
     AnnotationFact column = AnnotationFact.of(
         "org.springframework.data.relational.core.mapping.Column",
-        java.util.Map.of("value", "\"account_id\""));
+        Map.of("value", "\"account_id\""));
 
     assertThat(column.qualifiedName())
         .isEqualTo("org.springframework.data.relational.core.mapping.Column");
@@ -109,13 +138,13 @@ class EntityModelContractTest {
   @Test
   void blankIdentityIsRejectedAtConstruction() {
     assertThatExceptionOfType(IllegalArgumentException.class)
-        .isThrownBy(() -> EntityDescriptor.builder(" ", TypeKind.CLASS).build());
+        .isThrownBy(() -> EntityDescriptor.builder("com.example", " ", TypeKind.CLASS).build());
     assertThatExceptionOfType(IllegalArgumentException.class)
         .isThrownBy(() -> attribute(" ", TypeRef.of("java.lang.Long"), false));
   }
 
   private static EntityDescriptor entity(String qualifiedName) {
-    return EntityDescriptor.builder(qualifiedName, TypeKind.CLASS)
+    return EntityDescriptor.builder("com.example", qualifiedName, TypeKind.CLASS)
         .tableName("t")
         .build();
   }

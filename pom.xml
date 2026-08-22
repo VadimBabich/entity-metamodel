@@ -50,6 +50,8 @@
     <module>entity-metamodel-bom</module>
     <module>entity-metamodel-core</module>
     <module>entity-metamodel-runtime</module>
+    <module>entity-metamodel-runtime-r2dbc</module>
+    <module>entity-metamodel-processor</module>
   </modules>
 
   <properties>
@@ -67,13 +69,18 @@
 
     <junit.version>5.13.1</junit.version>
     <assertj-core.version>3.27.7</assertj-core.version>
+    <spring-data-relational.version>3.5.12</spring-data-relational.version>
+    <spring-data-r2dbc.version>4.1.0</spring-data-r2dbc.version>
+    <reactor-core.version>2023.12.1</reactor-core.version>
   </properties>
 
   <build>
     <pluginManagement>
       <plugins>
         <!-- Super-POM defaults vary with the local Maven version, which would make jar bytes
-             environment-dependent. Versions only; configuration stays per module. -->
+             environment-dependent. Versions only; configuration stays per module. A managed
+             <configuration> here reaches every module, jpa-metadata-maven-plugin included, which
+             compiles without -Xlint:all or failOnWarning by design. -->
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-jar-plugin</artifactId>
