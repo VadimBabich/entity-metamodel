@@ -1,6 +1,6 @@
 # Roadmap
 
-As of 2026-08-18. Updated when direction changes, reviewed at least once per release cycle.
+As of 2026-08-21. Updated when direction changes, reviewed at least once per release cycle.
 
 ## Where the project is
 
@@ -10,8 +10,9 @@ Version 1.0.0 is abandoned; the 1.1.x line is current.
 
 ## Where it is going
 
-A **2.0 reboot** is in design and early implementation, replacing the source-parsing Maven
-plugin with a **JSR-269 annotation processor** plus a small owned runtime library:
+A **2.0 reboot** replaces the source-parsing Maven plugin with a **JSR-269 annotation processor**
+plus a small owned runtime library. The model vocabulary and the runtime reference types are built;
+the processor and query surface are next:
 
 - **Runtime library** — typed references (`EntityRef` / `PropertyRef` / `JoinRef`) that generated
   metamodels compile against, with no framework types in the public API surface.
@@ -21,14 +22,17 @@ plugin with a **JSR-269 annotation processor** plus a small owned runtime librar
   including joins, driven by the generated metamodel.
 - **BOM** — one aligned version for the whole family.
 
-The 2.0 line ships as milestones (`2.0.0-M1` → RC → GA). The 1.x plugin is maintained through
-the transition and retired in stages after the processor reaches output parity — the generated
-code of both generations is held byte-identical by a committed golden corpus until then.
+Nothing is published yet, deliberately: the first release to Maven Central will be a version that
+generates code, not a milestone of parts nobody can use. The 1.x plugin is maintained through the
+transition and retired in stages after the processor reaches output parity — the generated code of
+both generations is held byte-identical by a committed golden corpus until then.
 
 ## What guides the order
 
-Correctness gates before features: output-shape freeze, incremental-compilation verification,
-and API/SPI compatibility gating all precede the first 2.0 publication to Maven Central.
+Correctness gates before features: the generated-shape freeze and the incremental-compilation
+decision precede any 2.0 publication, and API/SPI compatibility gating precedes **2.0.0 itself**.
+Milestones are deliberately outside that guarantee — that is what the `-M` qualifier buys, and why
+the processor reaches output parity against the golden corpus before GA rather than before M1.
 
 ## Influencing the roadmap
 

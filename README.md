@@ -1,206 +1,242 @@
-# JPA Metadata Maven Plugin
+# entity-metamodel
 
-The **JPA Metadata Maven Plugin** scans your Java source code for entity classes annotated with Spring Data Relational's `@Table` and `@Column` and generates metadata classes for type-safe query construction. It's designed with modular backends in mind, including **R2DBC** and custom implementations.
+Generated column constants for Spring Data R2DBC, so your queries stop referring to columns by
+string.
 
-> **_⚠️ Naming note:_** despite the plugin's name, JPA (`jakarta.persistence`) annotations are **not** supported. The plugin processes **Spring Data Relational** annotations (`org.springframework.data.relational.core.mapping.Table`/`.Column`) only.
+## What's here
 
-Inspired by the **Hibernate JPA Static Metamodel Generator**, this plugin solves a key issue in **Spring Data R2DBC**: custom queries rely heavily on string-based column references. If a column is renamed or removed, you won’t know until runtime.
+The repository holds two lines at different stages. They release independently, and only one of them
+generates code today.
 
-This plugin helps prevent that by generating static metamodels from your entities, bringing compile-time safety and better IDE support to your query code.
+| | What it is | Where to get it | State |
+|---|---|---|---|
+| **`jpa-metadata-maven-plugin`** | Maven plugin that parses your entity sources and generates metamodels. The working generator. | [build from source](#building-the-plugin) | 1.x, in use |
+| **`entity-metamodel-core`**, **`-runtime`**, **`-bom`** | The vocabulary and reference types the replacement generates against. | [in this repository](#the-2x-family) | built, unpublished; generates nothing yet |
 
-> **_⚠️ Note:_** While this plugin improves safety, it doesn’t provide fully type-safe query building. Spring’s Criteria API still uses strings for some parts internally.
+If you want type-safe column references working in your project today, you want the plugin, and the
+[five-minute walkthrough](#five-minutes). If you're here to see where this is going, start with
+[the 2.x family](#the-2x-family).
 
-## Features
+## The problem
 
-- Scans and parses annotated Java entity classes.
-- Builds static metamodel classes automatically.
-- Works with Spring Data R2DBC’s SQL DSL for safer query construction.
-- Supports modular metadata generation.
+Spring Data R2DBC gives you `Criteria` and a SQL DSL, and both take column names as strings:
 
-> **_⚠️ Limitations_**
-> - Only classes in the configured packageName are scanned.
-> - It doesn’t process classes from dependencies or outside that package.
----
+```text
+Criteria.where("usat_value").is(value);
+```
 
-## Example: Find Users by Attribute Value
-Let’s walk through a real use case: fetching users who have a specific attribute value. The schema includes two tables:
-- `users` – stores basic user data.
-- `user_attributes` – stores attributes for each user (one-to-many).
+That string is invisible to the compiler. Rename the field, change the `@Column`, delete the
+property — the build stays green and you find out from a failing query at runtime, usually in the one
+code path nobody exercised locally. Grep is the only refactoring tool that works, and it misses the
+string that was built by concatenation.
 
-1. ### Entity Classes
-   ```java
-      // Represents the 'users' table
-      @Immutable
-      @Table("users")
-      public record User(
-              @Id @Column("user_id") String id,
-              @Column("user_name") String name
-      ) { }
-      
-      // Represents the 'user_attributes' table (linked to 'users' via userId)
-      @Immutable
-      @Table("user_attributes")
-      public record UserAttribute(
-              @Id @Column("usat_id") Long attributeId,
-              @Column("usat_user_id") String userId, // Foreign key referencing 'users.user_id'
-              @Column("usat_value") String attributeValue
-      ) { }
-      ```
-2. ### Target SQL Query
-   ```sql
-   SELECT _user.*
-   FROM users _user
-   JOIN user_attributes _userattributes
-        ON _userattributes.usat_user_id = _user.user_id
-   WHERE _userattributes.usat_value = $1
-   ```
-3. ### Reactive Repository Method
-   Using Spring’s SQL DSL with metamodels:
-   ```java
-     public Flux<User> findUsersByAttributeValue(String attributeValue) {
-     
-      // Define filtering criteria on the attribute value 
-      Criteria criteria = Criteria.where(UserAttribute_.ATTRIBUTE_VALUE.name()).is(attributeValue);
-      BoundCondition condition = queryMapper.getMappedObject(criteria);
-   
-      Table userTable = User_.getTable();
-      Table attributeTable = UserAttribute_.getTable();
-   
-      // Construct the SQL join using Spring’s SQL DSL
-      SelectJoin select = Select.builder()
-              .select(AsteriskFromTable.create(userTable))
-              .from(userTable)
-              .join(attributeTable)
-              .on(Conditions.isEqual(UserAttribute_.USER_ID, User_.ID))
-              .where(condition.getCondition());
-   
-      return client
-              .sql(() -> select.build().toString())
-              .map(this::process) // Maps result row to User
-              .all();
-   }
-   ```
-4. ### Metamodel Classes (Generated)
-   `UserAttribute_`
-     ```java
-     import org.springframework.data.r2dbc.config.StaticR2dbcEntityTemplateAccessor_;
-     import org.springframework.data.relational.core.sql.Column_;
-     import org.springframework.data.relational.core.sql.Table;
-   
-     public final class UserAttribute_ {
-        public static final Column_ ATTRIBUTE_ID = new Column_(UserAttribute.class, "attributeId");
-   
-        public static final Column_ USER_ID = new Column_(UserAttribute.class, "userId");
-   
-        public static final Column_ ATTRIBUTE_VALUE = new Column_(UserAttribute.class, "attributeValue");
-   
-        private UserAttribute_() {
-        }
-   
-        public static Table getTable() {
-           return StaticR2dbcEntityTemplateAccessor_.getTable(UserAttribute.class);
-        }
-     }
-     ```
-     `User_`
-     ```java
-     import org.springframework.data.r2dbc.config.StaticR2dbcEntityTemplateAccessor_;
-     import org.springframework.data.relational.core.sql.Column_;
-     import org.springframework.data.relational.core.sql.Table;
-     
-     public final class User_ {
-       public static final Column_ ID = new Column_(User.class, "id");
-     
-       public static final Column_ NAME = new Column_(User.class, "name");
-     
-       private User_() {
-       }
-     
-       public static Table getTable() {
-         return StaticR2dbcEntityTemplateAccessor_.getTable(User.class);
-       }
-     }
-     ```
-### Dynamic Criteria Support
-While the example uses a specific condition (filter by attribute value), the real power lies in the flexibility: you can construct queries dynamically using any `Criteria`. Unlike `@Query`-based repository methods, this approach enables composable, reusable, and safer query building, all while benefitting from compile-time validation.
+The fix is unglamorous: derive the names from the entities during the build and refer to those
+instead. Renaming a property then breaks compilation, which is where you want to hear about it.
+
+## What makes it different
+
+The alternatives tend to sit at one of two extremes. Hand-written constant classes work but rot
+quietly — nothing keeps them in step with the entity. Runtime introspection stays in step but moves
+the error back to runtime, which is the problem you were trying to solve.
+
+This generates real Java source during the build:
+
+- **Compile-time.** A wrong reference is a compile error, not a failed query.
+- **Ordinary code.** Generated files are plain `.java` on your compile path. Ctrl-click reaches the
+  declaration, "find usages" works, the debugger steps through them.
+- **Deterministic.** Regenerating over unchanged sources is byte-identical — no timestamps, no
+  environment-dependent content. A unit test and an integration test hold that still, so generated
+  sources never churn your diffs.
+- **Narrow.** It reads Spring Data Relational annotations and emits constants. It does not wrap your
+  repositories, replace `Criteria`, or ask you to adopt a query language.
+
+## Five minutes
+
+Install the plugin into your local repository first — see [Building the plugin](#building-the-plugin).
+
+An entity — an ordinary Spring Data Relational record, with nothing added for the plugin's benefit:
+
+```java
+@Table("users")
+public record User(
+    @Id @Column("user_id") String id,
+    @Column("user_name") String name
+) { }
+```
+
+Run `mvn generate-sources`, and a metamodel appears beside it:
+
+```java
+public final class User_ {
+  public static final Column_ ID = new Column_(User.class, "id");
+  public static final Column_ NAME = new Column_(User.class, "name");
+
+  public static Table getTable() {
+    return StaticR2dbcEntityTemplateAccessor_.getTable(User.class);
+  }
+}
+```
+
+Queries now name the property through a constant and the table through the entity:
+
+```java
+Criteria criteria = Criteria.where(UserAttribute_.ATTRIBUTE_VALUE.name()).is(attributeValue);
+
+SelectJoin select = Select.builder()
+    .select(AsteriskFromTable.create(User_.getTable()))
+    .from(User_.getTable())
+    .join(UserAttribute_.getTable())
+    .on(Conditions.isEqual(UserAttribute_.USER_ID, User_.ID));
+```
+
+`Column_` holds the entity type and the property name, and resolves the physical column through
+Spring's own mapping context — so `@Column("user_id")` stays the single source of truth. Rename `id`
+to `userId` and this file stops compiling.
 
 ## Configuration
 
-### Basic `pom.xml` Setup
-
 ```xml
+<plugin>
+  <groupId>io.github.vadimbabich</groupId>
+  <artifactId>jpa-metadata-maven-plugin</artifactId>
+  <version>1.1.0-SNAPSHOT</version>
+  <executions>
+    <execution>
+      <goals><goal>generate-metadata</goal></goals>
+    </execution>
+  </executions>
+  <configuration>
+    <packageName>com.example.model</packageName>
+  </configuration>
+</plugin>
+```
 
-<build>
-  <plugins>
-    <plugin>
-      <groupId>io.github.vadimbabich</groupId>
-      <artifactId>jpa-metadata-maven-plugin</artifactId>
-      <version>1.0.0</version>
-      <executions>
-         <execution>
-            <phase>generate-sources</phase>
-            <goals>
-               <goal>generate-metadata</goal>
-            </goals>
-         </execution>
-      </executions>
-      <configuration>
-        <packageName>com.example.model</packageName>
-        <outputDirectory>${project.build.directory}/generated-sources/r2dbc</outputDirectory>
-      </configuration>
-    </plugin>
-  </plugins>
-</build>
+The goal binds to `generate-sources` and registers its output as a compile source root, so generated
+code is compiled with everything else.
+
+One extra step: `getTable()` goes through a generated accessor, which has to be a bean.
+
+```java
+@Bean
+StaticR2dbcEntityTemplateAccessor_ staticAccessor() {
+  return new StaticR2dbcEntityTemplateAccessor_();
+}
 ```
 
 ## Parameters
 
-| Parameter               | Required | Default                                                | Description                                                |
-|-------------------------|----------|--------------------------------------------------------|------------------------------------------------------------|
-| outputDirectory         | ❌       | ${project.build.directory}/generated-sources/metamodel | Directory where generated metadata classes will be placed. |
-| packageName             | ✅       | none                                                   | Package to scan for entity classes.                        |
-| languageLevel           | ❌       | JAVA_17                                                | Java language level used during parsing.                   |
-| sourceDirectory         | ❌       | src/main/java                                          | Path to the root directory of the Java source files.       |
-| entityMetadataGenerator | ❌       | r2dbc                                                  | Name of the metadata generator to use (e.g., r2dbc).       |
+| Parameter               | Required | Default                                                | Description                                   |
+|-------------------------|----------|--------------------------------------------------------|-----------------------------------------------|
+| packageName             | ✅        | none                                                   | Root package scanned for entities.            |
+| outputDirectory         | ❌        | ${project.build.directory}/generated-sources/metamodel | Where generated sources are written.          |
+| sourceDirectory         | ❌        | src/main/java                                          | Source root to scan, relative to the project. |
+| languageLevel           | ❌        | JAVA_17                                                | Java level used to parse the sources.         |
+| entityMetadataGenerator | ❌        | r2dbc                                                  | Generator implementation; only `r2dbc` ships. |
 
+A test checks this table against the Mojo's own parameters, so it cannot drift from the code.
 
-## Sample Output
-When the plugin runs, it logs a summary like:\
+## Supported
 
-```
-Generating metadata for 'com.example.model' package with language level 'JAVA_17'
-Generated metadata for 5 entity classes into: '/target/generated-sources/metamodel'
-Included entities:
- • User
-  ↳ Address
- • Product
-```
+- Spring Data Relational `@Table` and `@Column`, on records and on classes
+- Nested entity types, mirroring your source nesting
+- Java 17+, Maven 3.9+
+- Configurable source root, output directory and parse level
 
-The first and second lines are format-checked against the plugin's actual output by the
-integration test (`jpa-metadata-maven-plugin/src/it/simple-consumer/verify.groovy`); the entity tree is illustrative.
+## Not supported
 
----
+Worth reading before you adopt it.
 
-## Integration in a Project
+- **Not JPA.** Despite the artifactId, `jakarta.persistence` annotations are ignored — it reads
+  `org.springframework.data.relational.core.mapping` only. The name is historical, and the artifact
+  keeps it for its remaining releases.
+- **Maven only.** There is no Gradle plugin.
+- **One package.** Only classes under `packageName` are scanned. Not dependencies, not sibling
+  packages.
+- **Source-based.** It parses `src/main/java`, so entities that arrive in a jar are invisible to it.
+- **Two files land in Spring's own packages** (`Column_`, `StaticR2dbcEntityTemplateAccessor_`).
+  That works and is frozen for compatibility, but it is the main thing 2.x removes.
+- **Queries are not fully type-safe.** `Criteria` takes `Object` for values, so this buys correct
+  *names*, not checked comparisons.
 
-Make sure to register the generated `StaticR2dbcEntityTemplateAccessor_` so Spring Data can resolve entity metadata:
+## IDE
+
+Generated sources are registered as a compile source root, so any IDE that imports the Maven model
+picks them up after a reimport. If IntelliJ hasn't, right-click
+`target/generated-sources/metamodel` → **Mark Directory as → Generated Sources Root**.
+
+## Troubleshooting
+
+| Problem | Likely cause | Fix |
+|---|---|---|
+| Nothing generated | `packageName` doesn't match the entity package, or entities sit outside `sourceDirectory` | Check both against the summary the plugin logs |
+| Plugin not found | it isn't published | `mvn install` it from source first |
+| `Column_` won't resolve | generated output isn't on the compile path | Reimport the Maven project; confirm the goal ran in `generate-sources` |
+| `getTable()` fails at runtime | the accessor isn't a bean | Register `StaticR2dbcEntityTemplateAccessor_` (above) |
+| One entity is missing | no `@Table`, or it is outside `packageName` | Only `@Table` types in that package are emitted |
+| Stale metamodel after a rename | output kept from an earlier run | `mvn clean generate-sources` |
+| Parse failure on newer syntax | source uses a level above `languageLevel` | Raise `languageLevel` |
+
+## The 2.x family
+
+Two artifacts are built in this repository and not published. They are the vocabulary the
+replacement is made of — worth reading if you want to see the shape before it ships, not something
+to depend on yet.
+
+- **`entity-metamodel-core`** — the model a generator reads and emitters write against:
+  `EntityModel`, `EntityDescriptor`, `AttributeDescriptor`, `TypeRef` and friends. No dependencies
+  at all.
+- **`entity-metamodel-runtime`** — the types generated metamodels will compile against, plus the
+  owned `@Generated` and `@RawSql` markers. Depends only on `spring-data-relational`.
+
+A reference is held by hand and resolved through Spring's mapping context — the same trick `Column_`
+does in 1.x, without the split packages:
+
 ```java
-@Configuration
-@EnableTransactionManagement
-@EnableR2dbcAuditing
-public class DatabaseConfiguration {
+EntityRef<User> user = EntityRef.of(User.class);
+PropertyRef<User, String> id = user.property("id", String.class);
 
-   @Bean
-   StaticR2dbcEntityTemplateAccessor_ staticAccessor(){
-      return new StaticR2dbcEntityTemplateAccessor_();
-   }
-}
+String column = id.columnName(mappingContext);   // "user_id"
+String table = user.tableName(mappingContext);   // "users"
 ```
 
-## IntelliJ IDEA Setup
+`EntityRef.as("u")` gives an aliased instance, which is what joins will be built from. Signatures
+can still change; there is no compatibility promise until the first release.
 
-Generated files land in `target/generated-sources`. To enable autocomplete and navigation:
+## Where it's going
 
-1. Right-click the `target/generated-sources` folder.
-2. Select **Mark Directory as → Generated Sources Root**.
-IntelliJ will now treat these files like regular code.
+The replacement is a JSR-269 annotation processor instead of source parsing: build-tool neutral,
+incremental-aware, and emitting only into your own packages. The processor, the R2DBC execution
+module and the fluent query surface are designed and being built.
+
+**Nothing goes to Maven Central until it generates code.** Publishing a milestone of parts would
+spend version numbers on artifacts nobody can use, and Maven Central is permanent — so the first
+release will be one you can actually run.
+
+The 1.x plugin is maintained through the transition and retired in stages once the processor produces
+the same output — the two generations are held byte-identical by a committed golden corpus until
+then. [`ROADMAP.md`](ROADMAP.md) has the order of work; [`CHANGELOG.md`](CHANGELOG.md) has what
+actually shipped.
+
+## Building the plugin
+
+Nothing here is published, so build it locally:
+
+```bash
+git clone https://github.com/VadimBabich/entity-metamodel.git
+cd entity-metamodel
+mvn -B install
+```
+
+That installs it as `1.1.0-SNAPSHOT`, which is the version to reference in your build. `mvn -B verify`
+additionally runs the integration test: it generates against a sample consumer, compiles the result
+and diffs it against the golden corpus — a useful check that your JDK produces the same bytes.
+
+## Contributing
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) covers the build and the conventions. Security reports go
+through GitHub's private advisories, per [`SECURITY.md`](SECURITY.md) — please don't open a public
+issue for those.
+
+Bug reports are welcome; use-case reports more so. The 2.x design came from measured usage in real
+codebases rather than from guesswork, and that only keeps working if people describe what they are
+actually doing.

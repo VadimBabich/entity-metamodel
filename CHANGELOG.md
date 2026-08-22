@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+The `entity-metamodel` family — `core`, `runtime` and a BOM — is built in this repository and
+**not published**. It holds the model vocabulary and the reference types (`EntityRef`,
+`PropertyRef`, `JoinRef`) that generated code will compile against, plus the owned `@Generated` and
+`@RawSql` markers.
+
+Nothing generates or executes yet. The first publication will be the version where it does, rather
+than a milestone of parts — see [`ROADMAP.md`](ROADMAP.md).
+
 ## 1.1.0 — 2026-08-15
 
 First release since the plugin was renamed. The theme is trustworthy output: generation is now
