@@ -1,23 +1,28 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
+import java.util.List;
+import java.util.Objects;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 public final class FluentSelect<E> {
 
-  private final EntityRef<E> entity;
+  private final QueryState<E> state;
 
-  private FluentSelect(EntityRef<E> entity) {
-    this.entity = entity;
+  private FluentSelect(QueryState<E> state) {
+    this.state = Objects.requireNonNull(state, "state");
   }
 
   public static <E> FluentSelect<E> from(EntityRef<E> entity) {
-    return new FluentSelect<>(entity);
+    Objects.requireNonNull(entity, "entity");
+    return new FluentSelect<>(new QueryState<>(entity));
   }
 
   public FluentSelect<E> where(Condition condition) {
-    return this;
+    Objects.requireNonNull(condition, "condition");
+    QueryState<E> newState = state.withWhere(condition);
+    return new FluentSelect<>(newState);
   }
 
   public Flux<E> all() {
@@ -32,7 +37,7 @@ public final class FluentSelect<E> {
     throw new UnsupportedOperationException("Terminal: first() not yet implemented");
   }
 
-  public Mono<java.util.List<E>> list() {
+  public Mono<List<E>> list() {
     throw new UnsupportedOperationException("Terminal: list() not yet implemented");
   }
 
