@@ -23,6 +23,29 @@ class RefEqualityContractTest {
   }
 
   @Test
+  void aQualifierThatCouldEscapeTheIdentifierIsRejected() {
+    EntityRef<Account> account = EntityRef.of(Account.class);
+
+    // The alias reaches the statement as a bare, unquoted identifier. Anything outside the
+    // identifier alphabet either breaks the SQL or ends it and appends whatever follows.
+    assertThatIllegalArgumentException().isThrownBy(() -> account.as("a b"));
+    assertThatIllegalArgumentException().isThrownBy(() -> account.as("a-b"));
+    assertThatIllegalArgumentException()
+        .isThrownBy(() -> account.as("x\" ; drop table accounts --"));
+  }
+
+  @Test
+  void anAliasQualifierIsLowerCasedBecauseUnquotedIdentifiersFold() {
+    EntityRef<Account> account = EntityRef.of(Account.class);
+
+    // A database folds an unquoted alias to lower case, so two qualifiers differing only in case
+    // are one table instance there. Treating them as distinct here would mint two refs that both
+    // claim the same projected labels.
+    assertThat(account.as("Sponsor").alias()).isEqualTo("account_sponsor");
+    assertThat(account.as("Sponsor")).isEqualTo(account.as("sponsor"));
+  }
+
+  @Test
   void aliasedCopyIsADistinctInstanceWithDistinctIdentity() {
     EntityRef<Account> defaultInstance = EntityRef.of(Account.class);
     EntityRef<Account> secondInstance = defaultInstance.as("2");

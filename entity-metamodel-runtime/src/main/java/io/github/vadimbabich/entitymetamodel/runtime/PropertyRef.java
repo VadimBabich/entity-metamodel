@@ -1,5 +1,7 @@
 package io.github.vadimbabich.entitymetamodel.runtime;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Objects;
 import org.springframework.data.relational.core.mapping.RelationalMappingContext;
 import org.springframework.data.relational.core.mapping.RelationalPersistentEntity;
@@ -42,69 +44,55 @@ public final class PropertyRef<E, T> {
     return new PropertyRef<>(instance, propertyName, declaredRawType);
   }
 
-  public Predicate is(T value) {
-    return (Predicate) invokeFactory("equal", this, value);
+  /** Equality against one value; {@code null} is rejected — use {@link #isNull()}. */
+  public Condition is(T value) {
+    return new Comparison(this, Comparison.Operator.EQUAL, value);
   }
 
-  @SafeVarargs
-  public final Predicate in(T... values) {
-    @SuppressWarnings("varargs")
-    Object[] safeValues = values;
-    return (Predicate) invokeFactory("in", this, safeValues);
+  /**
+   * Membership in a set of values. Takes a collection because that is what call sites hold.
+   *
+   * <p>Each value becomes one bind parameter, and drivers cap how many a statement may carry — so
+   * a list sized by upstream data will eventually fail at execution, and degrades planning well
+   * before that. Feed this a bounded set; a large one belongs in a temporary table or an
+   * {@code = ANY(?)} through the raw door.
+   */
+  public Condition in(Collection<? extends T> values) {
+    Objects.requireNonNull(values, "values");
+
+    return new Inclusion(this, List.copyOf(values));
   }
 
-  public Predicate isNull() {
-    return (Predicate) invokeFactory("isNull", this);
+  public Condition isNull() {
+    return new NullCheck(this);
   }
 
-  public Predicate gt(T value) {
-    return (Predicate) invokeFactory("greaterThan", this, value);
+  public Condition gt(T value) {
+    return new Comparison(this, Comparison.Operator.GREATER_THAN, value);
   }
 
-  public Predicate gte(T value) {
-    return (Predicate) invokeFactory("greaterThanOrEqual", this, value);
+  public Condition gte(T value) {
+    return new Comparison(this, Comparison.Operator.GREATER_THAN_OR_EQUAL, value);
   }
 
-  public Predicate lt(T value) {
-    return (Predicate) invokeFactory("lessThan", this, value);
+  public Condition lt(T value) {
+    return new Comparison(this, Comparison.Operator.LESS_THAN, value);
   }
 
-  public Predicate lte(T value) {
-    return (Predicate) invokeFactory("lessThanOrEqual", this, value);
+  public Condition lte(T value) {
+    return new Comparison(this, Comparison.Operator.LESS_THAN_OR_EQUAL, value);
   }
 
-  public Predicate like(T pattern) {
-    return (Predicate) invokeFactory("like", this, pattern);
+  public Condition like(T pattern) {
+    return new Comparison(this, Comparison.Operator.LIKE, pattern);
   }
 
-  private static Object invokeFactory(String operator, Object... args) {
-    try {
-      Class<?> factoryClass = loadFactoryClass();
-      Object factory = factoryClass.getMethod("getInstance").invoke(null);
-
-      return factoryClass.getMethod("build", String.class, PropertyRef.class, Object[].class)
-          .invoke(factory, operator, args[0], java.util.Arrays.copyOfRange(args, 1, args.length));
-    } catch (ReflectiveOperationException e) {
-      throw new UnsupportedOperationException("Predicate building requires the r2dbc module", e);
-    }
+  public SortOrder asc() {
+    return new SortOrder(this, SortOrder.Direction.ASCENDING);
   }
 
-  private static Class<?> loadFactoryClass() throws ReflectiveOperationException {
-    String factoryClassName = "io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ConditionFactory";
-
-    try {
-      return Class.forName(factoryClassName);
-    } catch (ClassNotFoundException e1) {
-      try {
-        return Class.forName(factoryClassName, true, PropertyRef.class.getClassLoader());
-      } catch (ClassNotFoundException e2) {
-        try {
-          return Class.forName(factoryClassName, true, Thread.currentThread().getContextClassLoader());
-        } catch (ClassNotFoundException e3) {
-          throw new ClassNotFoundException(factoryClassName + " not found on any class loader");
-        }
-      }
-    }
+  public SortOrder desc() {
+    return new SortOrder(this, SortOrder.Direction.DESCENDING);
   }
 
   /**
@@ -131,9 +119,8 @@ public final class PropertyRef<E, T> {
     }
 
     // Neither an embedded value nor a relationship is a column, and the context calls both
-    // entities — so they need separate answers, or one of them sends the reader to the wrong table.
-    // The context is asked rather than the type inspected, so a value type the consumer converts to
-    // a single column still resolves.
+    // entities, so they need separate answers. The context is asked rather than the type inspected,
+    // so a value type the consumer converts to one column still resolves.
     if (persistentProperty.isEmbedded()) {
       throw new IllegalArgumentException(
           describe()
