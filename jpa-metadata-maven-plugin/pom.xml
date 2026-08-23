@@ -58,7 +58,7 @@
     <guava.version>33.6.0-jre</guava.version>
 
     <!-- Test-->
-    <mockito.version>5.18.0</mockito.version>
+    <mockito.version>5.23.0</mockito.version>
     <spring-data.version>3.5.12</spring-data.version>
   </properties>
 
