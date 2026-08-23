@@ -1,4 +1,4 @@
-package io.github.vadimbabich.entitymetamodel.runtime;
+package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -16,10 +16,14 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 /**
- * The D3 invariant: no static mutable state in this module — no non-final statics, and final
- * statics only of known-immutable types. Enum constants count as immutable while the enum carries
- * no mutable instance state, and compiler-synthesized statics are exempt because no source change
- * can remove them.
+ * The D3 invariant holds for the execution module too — the reactive rules bind every runtime
+ * module, not just the resolution core. It matters more here: publishers are assembled on one
+ * thread and subscribed on another, so a field written during assembly and read during rendering is
+ * a data race rather than a style question.
+ *
+ * <p>Deliberately a copy of the resolution core's sweep rather than shared test infrastructure. The
+ * reactive rules put this check in one ArchUnit suite spanning both modules; until that exists, a
+ * module without its own copy is a module with no guard at all, and the executor lands here.
  */
 class NoStaticMutableStateTest {
 
@@ -83,7 +87,7 @@ class NoStaticMutableStateTest {
 
   private List<Class<?>> allModuleClasses() throws URISyntaxException {
     Path classesRoot = Path.of(
-        EntityRef.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+        QueryRenderer.class.getProtectionDomain().getCodeSource().getLocation().toURI());
 
     try (Stream<Path> classFiles = Files.walk(classesRoot)) {
       List<Class<?>> moduleClasses = new ArrayList<>();
@@ -105,7 +109,7 @@ class NoStaticMutableStateTest {
         .replaceAll("\\.class$", "");
 
     try {
-      return Class.forName(binaryName, false, EntityRef.class.getClassLoader());
+      return Class.forName(binaryName, false, QueryRenderer.class.getClassLoader());
     } catch (ClassNotFoundException e) {
       throw new IllegalStateException("Module class not loadable: " + binaryName, e);
     }

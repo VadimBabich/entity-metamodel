@@ -137,7 +137,6 @@ final class MetamodelWriter {
     }
   }
 
-  // Names this unit writes itself — the generated classes and the entities they name.
   private Set<String> declaredNamesOf(MetamodelClass metamodel) {
     Set<String> declared = new LinkedHashSet<>();
 

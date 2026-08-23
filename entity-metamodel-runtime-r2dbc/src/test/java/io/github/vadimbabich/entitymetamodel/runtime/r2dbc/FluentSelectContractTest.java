@@ -1,63 +1,70 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
+
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import io.github.vadimbabich.entitymetamodel.runtime.PropertyRef;
+import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.DisplayName;
+import org.springframework.data.r2dbc.dialect.PostgresDialect;
+import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
-import static org.assertj.core.api.Assertions.*;
-
-@DisplayName("FluentSelect contract tests")
+/**
+ * A builder step returns a new description and leaves the receiver alone, so one half-built query
+ * can be finished two different ways concurrently. Immutability is asserted through what the
+ * descriptions render, not through reference identity — a copy that shared mutable state would
+ * satisfy {@code isNotSameAs} and still corrupt its sibling.
+ */
 class FluentSelectContractTest {
 
-  @Test
-  @DisplayName("should create immutable builder for single-entity select")
-  void singleEntitySelect() {
-    EntityRef<Account> accountEntity = EntityRef.of(Account.class);
+  private static final EntityRef<Account> ACCOUNT = EntityRef.of(Account.class);
 
-    FluentSelect<Account> select = FluentSelect.from(accountEntity);
-
-    assertThat(select).isNotNull();
-  }
+  private final QueryRenderer renderer =
+      new QueryRenderer(new R2dbcMappingContext(), PostgresDialect.INSTANCE);
 
   @Test
-  @DisplayName("should build terminal statements")
-  void terminals() {
-    EntityRef<Account> accountEntity = EntityRef.of(Account.class);
+  void addingAWhereClauseLeavesTheOriginalDescriptionUnfiltered() {
+    FluentSelect<Account> everyAccount = FluentSelect.from(ACCOUNT);
 
-    FluentSelect<Account> select = FluentSelect.from(accountEntity);
+    FluentSelect<Account> oneAccount =
+        everyAccount.where(ACCOUNT.property("id", Long.class).is(1L));
 
-    assertThat(select.all()).isNotNull();
-    assertThat(select.one()).isNotNull();
-    assertThat(select.first()).isNotNull();
-    assertThat(select.list()).isNotNull();
-    assertThat(select.count()).isNotNull();
-    assertThat(select.exists()).isNotNull();
+    assertThat(renderer.render(everyAccount).sql()).doesNotContain("WHERE");
+    assertThat(renderer.render(oneAccount).sql()).contains("WHERE");
   }
 
   @Test
-  @DisplayName("builder is immutable — each step returns new instance")
-  void builderImmutability() {
-    EntityRef<Account> accountEntity = EntityRef.of(Account.class);
-    FluentSelect<Account> original = FluentSelect.from(accountEntity);
+  void twoQueriesDerivedFromOneBaseDoNotSeeEachOthersFilters() {
+    PropertyRef<Account, Long> id = ACCOUNT.property("id", Long.class);
+    FluentSelect<Account> everyAccount = FluentSelect.from(ACCOUNT);
 
-    FluentSelect<Account> withWhereClause = original.where(
-        (Condition) AccountRef.ACTIVE.is(true)
-    );
+    FluentSelect<Account> firstAccount = everyAccount.where(id.is(1L));
+    FluentSelect<Account> secondAccount = everyAccount.where(id.is(2L));
 
-    assertThat(original).isNotSameAs(withWhereClause);
+    assertThat(renderer.render(firstAccount).values()).containsExactly(1L);
+    assertThat(renderer.render(secondAccount).values()).containsExactly(2L);
   }
 
-  // Test fixtures
-  static class Account {
-    public Long id;
-    public String name;
-    public Boolean active;
+  @Test
+  void aSecondFilterNarrowsInsteadOfReplacingTheFirst() {
+    PropertyRef<Account, Long> id = ACCOUNT.property("id", Long.class);
+    PropertyRef<Account, String> ownerEmail = ACCOUNT.property("ownerEmail", String.class);
+
+    // Conditional accumulation is how these queries get built. Replacing would silently drop an
+    // earlier scope — a tenant or owner predicate — and widen the result with no error.
+    RenderedStatement statement =
+        renderer.render(
+            FluentSelect.from(ACCOUNT).where(id.is(1L)).where(ownerEmail.is("owner@example.com")));
+
+    assertThat(statement.sql())
+        .endsWith("WHERE (\"account\".\"account_id\" = $1) AND (\"account\".\"owner_email\" = $2)");
+    assertThat(statement.values()).containsExactly(1L, "owner@example.com");
   }
 
-  static class AccountRef {
-    public static PropertyRef<Account, Long> ID = EntityRef.of(Account.class).property("id", Long.class);
-    public static PropertyRef<Account, String> NAME = EntityRef.of(Account.class).property("name", String.class);
-    public static PropertyRef<Account, Boolean> ACTIVE = EntityRef.of(Account.class).property("active", Boolean.class);
+  @Test
+  void aMissingEntityOrConditionIsRejectedWhereItIsPassed() {
+    assertThatNullPointerException().isThrownBy(() -> FluentSelect.from(null));
+    assertThatNullPointerException().isThrownBy(() -> FluentSelect.from(ACCOUNT).where(null));
   }
 }

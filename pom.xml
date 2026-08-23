@@ -66,12 +66,22 @@
     <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
     <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
     <maven-surefire-plugin.version>3.5.3</maven-surefire-plugin.version>
+    <maven-failsafe-plugin.version>3.5.3</maven-failsafe-plugin.version>
 
     <junit.version>5.13.1</junit.version>
     <assertj-core.version>3.27.7</assertj-core.version>
-    <spring-data-relational.version>3.5.12</spring-data-relational.version>
+    <!-- Supported substrate range is Spring Data 4.0.x-4.1.x. The two Spring Data artifacts ship
+         from one reactor and must move together; Reactor is pinned to the version
+         spring-data-r2dbc itself declares, so the direct and transitive views agree. -->
+    <spring-data-relational.version>4.1.0</spring-data-relational.version>
     <spring-data-r2dbc.version>4.1.0</spring-data-r2dbc.version>
-    <reactor-core.version>2023.12.1</reactor-core.version>
+    <reactor.version>3.8.6</reactor.version>
+
+    <!-- Execution-layer test substrate only: Testcontainers PostgreSQL on the 2.x coordinates,
+         driven through r2dbc-postgresql. Never compile-scope. -->
+    <testcontainers.version>2.0.5</testcontainers.version>
+    <r2dbc-postgresql.version>1.1.2.RELEASE</r2dbc-postgresql.version>
+    <netty.version>4.1.137.Final</netty.version>
   </properties>
 
   <build>
@@ -95,6 +105,11 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
           <version>${maven-surefire-plugin.version}</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-failsafe-plugin</artifactId>
+          <version>${maven-failsafe-plugin.version}</version>
         </plugin>
       </plugins>
     </pluginManagement>
