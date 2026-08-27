@@ -5,45 +5,43 @@ import java.util.Objects;
 
 /**
  * A raw SQL fragment used as a condition — the escape hatch for what the typed vocabulary cannot
- * express.
+ * express. An owned type, so no substrate expression reaches a signature the fragment touches.
  *
- * <p>An owned type on purpose: handing back a substrate expression would put that substrate's types
- * into every signature the fragment touches, pinning the whole surface to one version of it.
- *
- * <p>The fragment is a <em>template</em>, never a place to put values. Each {@code ?} becomes one
- * of the statement's bind markers, so a value that happens to look like SQL stays a value.
+ * <p>The fragment is a <em>template</em>, never a place to put values. Each {@code ?} consumes one
+ * argument in order: a {@link PropertyRef} becomes that instance's qualified column, and anything
+ * else becomes a bind marker. No driver can encode a ref, which is what makes the two safe to tell
+ * apart by type.
  */
-public record SqlExpr(String sql, List<?> bindings) implements Condition {
+public record SqlExpr(String sql, List<Object> arguments) implements Condition {
 
   private static final char PLACEHOLDER = '?';
 
   public SqlExpr {
     Objects.requireNonNull(sql, "sql");
-    Objects.requireNonNull(bindings, "bindings");
+    Objects.requireNonNull(arguments, "arguments");
 
     if (sql.isBlank()) {
       throw new IllegalArgumentException("A raw SQL fragment must not be blank");
     }
 
-    bindings = List.copyOf(bindings);
-    rejectPlaceholderMismatch(sql, bindings.size());
+    arguments = List.copyOf(arguments);
+    rejectPlaceholderMismatch(sql, arguments.size());
   }
 
   /**
-   * A raw fragment and the values its {@code ?} placeholders stand for.
+   * A raw fragment and the columns and values its {@code ?} placeholders stand for.
    *
    * <p><strong>The caller owns the safety of {@code sql}.</strong> Never assemble it from untrusted
-   * input: identifiers and operators in the fragment reach the database verbatim. Values are safe
-   * — pass every one of them as a binding rather than writing it into the fragment.
+   * input; pass every value as an argument rather than writing it into the fragment.
    */
   @RawSql
-  public static SqlExpr raw(String sql, Object... bindings) {
-    Objects.requireNonNull(bindings, "bindings");
+  public static SqlExpr raw(String sql, Object... arguments) {
+    Objects.requireNonNull(arguments, "arguments");
 
-    return new SqlExpr(sql, List.of(bindings));
+    return new SqlExpr(sql, List.of(arguments));
   }
 
-  private static void rejectPlaceholderMismatch(String sql, int bindingCount) {
+  private static void rejectPlaceholderMismatch(String sql, int argumentCount) {
     int placeholders = 0;
     for (int position = 0; position < sql.length(); position++) {
       if (sql.charAt(position) == PLACEHOLDER) {
@@ -51,10 +49,10 @@ public record SqlExpr(String sql, List<?> bindings) implements Condition {
       }
     }
 
-    if (placeholders != bindingCount) {
+    if (placeholders != argumentCount) {
       throw new IllegalArgumentException(
-          "The fragment has " + placeholders + " placeholder(s) but " + bindingCount
-              + " value(s) were given: " + sql
+          "The fragment has " + placeholders + " placeholder(s) but " + argumentCount
+              + " argument(s) were given: " + sql
               + ". Every '?' counts as a placeholder, including one inside a string literal or a"
               + " jsonb operator such as '?|', which this door cannot yet express");
     }

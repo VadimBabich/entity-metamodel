@@ -6,25 +6,28 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.r2dbc.convert.MappingR2dbcConverter;
 import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
 /**
- * Reading entities out of one row, keyed by instance rather than by class.
- *
- * <p>{@link #twoInstancesOfOneTableHydrateTheirOwnValues()} is the case the 1.x shape cannot do at
- * all: it reads by column name, so two projections of the same table give duplicate labels and the
- * second instance silently receives the first one's values.
+ * Reading entities out of one row, keyed by instance rather than by class — {@link
+ * #twoInstancesOfOneTableHydrateTheirOwnValues()} is the case the 1.x shape cannot do at all, since
+ * reading by column name gives both instances the first one's values.
  */
 class ProjectedRowTest {
 
   private static final EntityRef<Account> ACCOUNT = EntityRef.of(Account.class);
   private static final R2dbcMappingContext MAPPING_CONTEXT = new R2dbcMappingContext();
 
+  // The ordinary assignment; a statement that renames them is AliasFallbackTest's subject.
   private static ProjectedRow rowOf(Map<String, Object> columns) {
-    return new ProjectedRow(columns, new MappingR2dbcConverter(MAPPING_CONTEXT));
+    return new ProjectedRow(
+        columns,
+        new MappingR2dbcConverter(MAPPING_CONTEXT),
+        StatementAliases.declared(List.of(ACCOUNT, ACCOUNT.as("sponsor"))));
   }
 
   private static Map<String, Object> columns(Object... labelsAndValues) {

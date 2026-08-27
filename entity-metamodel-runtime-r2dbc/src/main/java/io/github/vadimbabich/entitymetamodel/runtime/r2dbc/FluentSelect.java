@@ -3,6 +3,7 @@ package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 import io.github.vadimbabich.entitymetamodel.runtime.Condition;
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import io.github.vadimbabich.entitymetamodel.runtime.JoinRef;
+import io.github.vadimbabich.entitymetamodel.runtime.PropertyEquality;
 import io.github.vadimbabich.entitymetamodel.runtime.SortOrder;
 import java.util.ArrayList;
 import java.util.List;
@@ -11,25 +12,25 @@ import java.util.Optional;
 import java.util.OptionalLong;
 
 /**
- * Immutable description of a select: every step returns a new instance, so a half-built query is
- * safe to hand to two callers that finish it differently, and describing one performs no I/O.
+ * Immutable description of a select: every step returns a new instance, and describing one performs
+ * no I/O. Joining a {@link JoinRef} brings its <em>target</em> instance in, starting from the
+ * source instance the ref names unless a third argument says otherwise.
  *
- * <p>Joining a {@link JoinRef} brings the relationship's <em>target</em> instance into the
- * statement; the source side must already be there, because a relationship is traversed from
- * something the statement already names.
+ * <p><strong>A join to a to-many side multiplies rows</strong>, and there is no {@code DISTINCT}
+ * here to undo it — to restrict rather than expand, filter with an {@code EXISTS} fragment.
  */
 public final class FluentSelect<E> {
 
   private final EntityRef<E> entity;
   private final Condition whereCondition;
-  private final List<TableJoin<?>> joins;
+  private final List<TableJoin> joins;
   private final List<SortOrder> sortOrders;
   private final List<EntityRef<?>> alsoSelected;
   private final Long limit;
   private final Long offset;
 
   private FluentSelect(
-      EntityRef<E> entity, Condition whereCondition, List<TableJoin<?>> joins,
+      EntityRef<E> entity, Condition whereCondition, List<TableJoin> joins,
       List<SortOrder> sortOrders, List<EntityRef<?>> alsoSelected, Long limit, Long offset) {
 
     this.entity = entity;
@@ -48,10 +49,8 @@ public final class FluentSelect<E> {
   }
 
   /**
-   * Also projects this instance's columns, so a mapper can read its entity out of each row.
-   * Separate
-   * from joining because most joins exist to filter, and projecting every joined table would fetch
-   * columns nobody reads. Asking twice projects once.
+   * Also projects this instance's columns, so a mapper can read its entity out of each row. Joining
+   * alone does not, because most joins exist to filter. Asking twice projects once.
    */
   public FluentSelect<E> alsoSelect(EntityRef<?> instance) {
     Objects.requireNonNull(instance, "instance");
@@ -68,8 +67,7 @@ public final class FluentSelect<E> {
   }
 
   /**
-   * Narrows the query. A second filter is AND-ed onto the first rather than replacing it, so the
-   * conditional-accumulation pattern cannot silently drop an earlier scope.
+   * A second filter is AND-ed onto the first, never replacing it.
    */
   public FluentSelect<E> where(Condition condition) {
     Objects.requireNonNull(condition, "condition");
@@ -82,7 +80,9 @@ public final class FluentSelect<E> {
     return new FluentSelect<>(entity, narrowed, joins, sortOrders, alsoSelected, limit, offset);
   }
 
-  /** Appends to the existing sort, so repeated calls read the same way as one call with both. */
+  /**
+   * Appends to the existing sort rather than replacing it.
+   */
   public FluentSelect<E> orderBy(SortOrder... orders) {
     Objects.requireNonNull(orders, "orders");
 
@@ -113,25 +113,27 @@ public final class FluentSelect<E> {
         entity, whereCondition, joins, sortOrders, alsoSelected, limit, skippedRows);
   }
 
-  /** Joins the relationship's target on its default instance. */
   public <T> FluentSelect<E> join(JoinRef<?, T> relationship) {
     Objects.requireNonNull(relationship, "relationship");
 
-    return addJoin(relationship, relationship.target().entity(), TableJoin.Kind.INNER);
+    return joinRelationship(relationship, relationship.target().entity(), TableJoin.Kind.INNER);
   }
 
-  /** Joins the target on a named instance — the only way to traverse one relationship twice. */
+  /**
+   * The only way to traverse one relationship twice.
+   */
   public <T> FluentSelect<E> join(JoinRef<?, T> relationship, EntityRef<T> targetInstance) {
     Objects.requireNonNull(relationship, "relationship");
     Objects.requireNonNull(targetInstance, "targetInstance");
 
-    return addJoin(relationship, targetInstance, TableJoin.Kind.INNER);
+    return joinRelationship(relationship, targetInstance, TableJoin.Kind.INNER);
   }
 
   public <T> FluentSelect<E> leftOuterJoin(JoinRef<?, T> relationship) {
     Objects.requireNonNull(relationship, "relationship");
 
-    return addJoin(relationship, relationship.target().entity(), TableJoin.Kind.LEFT_OUTER);
+    return joinRelationship(
+        relationship, relationship.target().entity(), TableJoin.Kind.LEFT_OUTER);
   }
 
   public <T> FluentSelect<E> leftOuterJoin(
@@ -139,7 +141,44 @@ public final class FluentSelect<E> {
     Objects.requireNonNull(relationship, "relationship");
     Objects.requireNonNull(targetInstance, "targetInstance");
 
-    return addJoin(relationship, targetInstance, TableJoin.Kind.LEFT_OUTER);
+    return joinRelationship(relationship, targetInstance, TableJoin.Kind.LEFT_OUTER);
+  }
+
+  /**
+   * Joins the target on a named instance, starting from a named instance of the source — the only
+   * way past the first hop of a self-referencing relationship.
+   */
+  public <S, T> FluentSelect<E> join(
+      JoinRef<S, T> relationship, EntityRef<S> sourceInstance, EntityRef<T> targetInstance) {
+
+    Objects.requireNonNull(relationship, "relationship");
+    Objects.requireNonNull(sourceInstance, "sourceInstance");
+    Objects.requireNonNull(targetInstance, "targetInstance");
+
+    return joinRelationship(relationship, sourceInstance, targetInstance, TableJoin.Kind.INNER);
+  }
+
+  public <S, T> FluentSelect<E> leftOuterJoin(
+      JoinRef<S, T> relationship, EntityRef<S> sourceInstance, EntityRef<T> targetInstance) {
+
+    Objects.requireNonNull(relationship, "relationship");
+    Objects.requireNonNull(sourceInstance, "sourceInstance");
+    Objects.requireNonNull(targetInstance, "targetInstance");
+
+    return joinRelationship(
+        relationship, sourceInstance, targetInstance, TableJoin.Kind.LEFT_OUTER);
+  }
+
+  /**
+   * Joins an instance on a condition the caller states — the door for what no declared relationship
+   * describes, such as an expression in the {@code ON} clause.
+   */
+  public PendingJoin<E> join(EntityRef<?> targetInstance) {
+    return pendingJoin(targetInstance, TableJoin.Kind.INNER);
+  }
+
+  public PendingJoin<E> leftOuterJoin(EntityRef<?> targetInstance) {
+    return pendingJoin(targetInstance, TableJoin.Kind.LEFT_OUTER);
   }
 
   EntityRef<E> entity() {
@@ -150,7 +189,7 @@ public final class FluentSelect<E> {
     return Optional.ofNullable(whereCondition);
   }
 
-  List<TableJoin<?>> joins() {
+  List<TableJoin> joins() {
     return joins;
   }
 
@@ -162,18 +201,25 @@ public final class FluentSelect<E> {
     return alsoSelected;
   }
 
-  /**
-   * The same query without its sort. Paging is kept: how many rows follow the first N does not
-   * depend on their order, but it very much depends on N.
-   */
+  // Paging is kept: it depends on N, not on the order.
   FluentSelect<E> withoutSort() {
     return new FluentSelect<>(
         entity, whereCondition, joins, List.of(), alsoSelected, limit, offset);
   }
 
-  /** What a mirror count renders: a total is drawn from the filtered set, not from one page. */
+  // What a mirror count renders: a total is drawn from the filtered set, not from one page.
   FluentSelect<E> withoutSortAndPaging() {
     return new FluentSelect<>(entity, whereCondition, joins, List.of(), alsoSelected, null, null);
+  }
+
+  // Narrows the limit and never widens it: limit(0) selects nothing, and LIMIT 1 would report a row
+  // it excludes.
+  FluentSelect<E> withAtMostOneRow() {
+    if (limit != null && limit < 1) {
+      return this;
+    }
+
+    return limit(1);
   }
 
   OptionalLong limit() {
@@ -192,31 +238,101 @@ public final class FluentSelect<E> {
     return OptionalLong.of(offset);
   }
 
-  private <T> FluentSelect<E> addJoin(
-      JoinRef<?, T> relationship, EntityRef<T> targetInstance, TableJoin.Kind kind) {
+  // Re-anchoring is how one relationship reaches N instances; the shared value type was already
+  // checked when the JoinRef was built.
+  private <S, T> FluentSelect<E> joinRelationship(
+      JoinRef<S, T> relationship, EntityRef<S> sourceInstance, EntityRef<T> targetInstance,
+      TableJoin.Kind kind) {
 
+    Condition sameKey =
+        new PropertyEquality(
+            relationship.source().of(sourceInstance),
+            relationship.target().of(targetInstance));
+
+    return withJoin(targetInstance, sameKey, kind);
+  }
+
+  // Starting from the instance the JoinRef names, which is unambiguous only while the statement
+  // carries one instance of that type.
+  private <S, T> FluentSelect<E> joinRelationship(
+      JoinRef<S, T> relationship, EntityRef<T> targetInstance, TableJoin.Kind kind) {
+
+    EntityRef<S> declaredSource = relationship.source().entity();
+    rejectUndeterminedSource(declaredSource, targetInstance);
+
+    return joinRelationship(relationship, declaredSource, targetInstance, kind);
+  }
+
+  // Presence applies to every relationship; the render would reject an absent source anyway, but
+  // only as an unknown table. Ambiguity applies only where source and target are the same entity,
+  // since that is where traversing twice means a chain — across types the anchor is a convention,
+  // and refusing there would reject statements that render correctly.
+  private void rejectUndeterminedSource(EntityRef<?> declaredSource, EntityRef<?> targetInstance) {
+    List<EntityRef<?>> present = instances();
+
+    if (!present.contains(declaredSource)) {
+      throw new IllegalArgumentException(
+          "This relationship starts from " + declaredSource.alias() + ", which this statement does"
+              + " not carry; name the instance it should start from with"
+              + " join(relationship, sourceInstance, targetInstance)");
+    }
+
+    if (!declaredSource.entityType().equals(targetInstance.entityType())) {
+      return;
+    }
+
+    for (EntityRef<?> other : present) {
+      if (other.entityType().equals(declaredSource.entityType())
+          && !other.equals(declaredSource)
+          && !other.equals(targetInstance)) {
+
+        throw new IllegalArgumentException(
+            "This statement carries more than one instance of "
+                + declaredSource.entityType().getSimpleName() + " (" + declaredSource.alias()
+                + " and " + other.alias() + "), so which one this relationship starts from is"
+                + " ambiguous; name it with join(relationship, sourceInstance, targetInstance)");
+      }
+    }
+  }
+
+  // One answer, because the guards and the renderer ask the same question — another way of bringing
+  // an instance in would otherwise have to be taught to each of them.
+  List<EntityRef<?>> instances() {
+    List<EntityRef<?>> present = new ArrayList<>();
+    present.add(entity);
+    for (TableJoin join : joins) {
+      present.add(join.targetInstance());
+    }
+
+    return present;
+  }
+
+  private PendingJoin<E> pendingJoin(EntityRef<?> targetInstance, TableJoin.Kind kind) {
+    Objects.requireNonNull(targetInstance, "targetInstance");
+
+    // Refused before the condition is asked for: the caller is about to write one over an instance
+    // that cannot be added.
     rejectInstanceAlreadyPresent(targetInstance);
 
-    List<TableJoin<?>> extended = new ArrayList<>(joins);
-    extended.add(new TableJoin<>(relationship, targetInstance, kind));
+    return new PendingJoin<>(this, targetInstance, kind);
+  }
+
+  FluentSelect<E> withJoin(
+      EntityRef<?> targetInstance, Condition onCondition, TableJoin.Kind kind) {
+    rejectInstanceAlreadyPresent(targetInstance);
+
+    List<TableJoin> extended = new ArrayList<>(joins);
+    extended.add(new TableJoin(targetInstance, onCondition, kind));
 
     return new FluentSelect<>(
         entity, whereCondition, List.copyOf(extended), sortOrders, alsoSelected, limit, offset);
   }
 
-  /**
-   * Rejected at the call site rather than at render time: two joins onto one instance both
-   * constrain the same table, and that quietly returns an intersection of the two relationships.
-   */
+  // At the call site rather than at render time: two joins onto one instance both constrain the
+  // same table, and that quietly returns an intersection of the two relationships.
   private void rejectInstanceAlreadyPresent(EntityRef<?> targetInstance) {
-    if (entity.equals(targetInstance)) {
+    if (instances().contains(targetInstance)) {
       throw alreadyPresent(targetInstance);
-    }
-
-    for (TableJoin<?> existingJoin : joins) {
-      if (existingJoin.targetInstance().equals(targetInstance)) {
-        throw alreadyPresent(targetInstance);
-      }
     }
   }
 

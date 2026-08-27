@@ -10,13 +10,9 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
- * The owned condition vocabulary is pure data built in this module: a predicate names a property,
- * an operator and values, and renders nowhere. That this test compiles and runs here — with no
- * execution module on the classpath — is the contract, since a predicate that needed the renderer
- * to exist would make every builder call a runtime failure instead of a compile-time one.
- *
- * <p>Two call-site rejections are pinned deliberately: both would otherwise produce SQL that runs
- * and quietly returns the wrong rows.
+ * The condition vocabulary is pure data. That this test compiles and runs here — with no execution
+ * module on the classpath — is the contract: a predicate needing the renderer would turn every
+ * builder call into a runtime failure instead of a compile-time one.
  */
 class ConditionVocabularyTest {
 
@@ -97,6 +93,38 @@ class ConditionVocabularyTest {
   }
 
   @Test
+  void negationWrapsTheConditionItInvertsRatherThanAlteringIt() {
+    PropertyRef<Account, String> ownerEmail = ACCOUNT.property("ownerEmail", String.class);
+    Condition emailMatches = ownerEmail.is("owner@example.com");
+
+    Condition emailDiffers = emailMatches.not();
+
+    assertThat(emailDiffers).isEqualTo(new Negation(emailMatches));
+    assertThat(((Negation) emailDiffers).condition()).isEqualTo(emailMatches);
+  }
+
+  @Test
+  void everyConditionVariantCanBeNegated() {
+    PropertyRef<Account, Long> id = ACCOUNT.property("id", Long.class);
+
+    assertThat(
+        List.of(
+            id.is(1L).not(),
+            id.in(List.of(1L, 2L)).not(),
+            id.isNull().not(),
+            id.is(1L).and(id.gt(0L)).not(),
+            SqlExpr.raw("owner_email = ?", "owner@example.com").not()))
+        .allMatch(Negation.class::isInstance);
+  }
+
+  @Test
+  void negatingTwiceIsNotSilentlyCollapsedIntoTheOriginal() {
+    Condition idIsOne = ACCOUNT.property("id", Long.class).is(1L);
+
+    assertThat(idIsOne.not().not()).isEqualTo(new Negation(new Negation(idIsOne)));
+  }
+
+  @Test
   void equalityIsValueIdentitySoADerivedStatementCanReuseACondition() {
     PropertyRef<Account, Long> id = ACCOUNT.property("id", Long.class);
 
@@ -111,6 +139,26 @@ class ConditionVocabularyTest {
 
     assertThat(lowercasedEmail)
         .isEqualTo(new SqlExpr("lower(owner_email) = ?", List.of("owner@example.com")));
+  }
+
+  @Test
+  void comparingTwoPropertiesNamesBothRatherThanBindingOneAsAValue() {
+    PropertyRef<Account, Long> accountId = ACCOUNT.property("id", Long.class);
+    PropertyRef<Account, Long> sponsorId = accountId.of(ACCOUNT.as("sponsor"));
+
+    Condition sameAccount = accountId.eq(sponsorId);
+
+    assertThat(sameAccount).isEqualTo(new PropertyEquality(accountId, sponsorId));
+  }
+
+  @Test
+  void aRawFragmentTakesAPropertyAsAColumnAndAnythingElseAsAValue() {
+    PropertyRef<Account, String> ownerEmail = ACCOUNT.property("ownerEmail", String.class);
+
+    SqlExpr lowercasedMatch = SqlExpr.raw("lower(?) = lower(?)", ownerEmail, "OWNER@example.com");
+
+    assertThat(lowercasedMatch.arguments())
+        .containsExactly(ownerEmail, "OWNER@example.com");
   }
 
   @Test

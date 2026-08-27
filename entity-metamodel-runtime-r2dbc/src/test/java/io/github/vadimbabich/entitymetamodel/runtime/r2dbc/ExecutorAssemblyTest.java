@@ -10,18 +10,23 @@ import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Person;
 import io.r2dbc.spi.ConnectionFactory;
 import io.r2dbc.spi.ConnectionFactoryMetadata;
+import org.jspecify.annotations.NullMarked;
 import org.junit.jupiter.api.Test;
 import org.reactivestreams.Publisher;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.r2dbc.convert.MappingR2dbcConverter;
 import org.springframework.data.r2dbc.dialect.PostgresDialect;
 import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 import org.springframework.r2dbc.core.DatabaseClient;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 /**
- * Describing a query must cost nothing until something subscribes. This runs without Docker on
- * purpose: the guarantee is about assembly, and a connection factory that refuses to hand out
- * connections proves it more sharply than a working database ever could.
+ * Describing a query must cost nothing until something subscribes. Without Docker on purpose: a
+ * connection factory that refuses connections proves that more sharply than a working database.
  */
 class ExecutorAssemblyTest {
 
@@ -30,8 +35,8 @@ class ExecutorAssemblyTest {
 
   private final RefusingConnectionFactory connectionFactory = new RefusingConnectionFactory();
 
-  // The markers are supplied rather than resolved: DatabaseClient.create() picks a
-  // BindMarkersFactory from the connection factory's driver name, and this one names no driver.
+  // Markers supplied rather than resolved: DatabaseClient.create() picks a factory from the
+  // connection factory's driver name, and this one names no driver.
   private final MetamodelQueryExecutor executor =
       new MetamodelQueryExecutor(
           DatabaseClient.builder()
@@ -75,14 +80,53 @@ class ExecutorAssemblyTest {
   void onlyTheTerminalsThatHydrateRefuseAnEmbeddedBearingEntity() {
     FluentSelect<Person> people = FluentSelect.from(EntityRef.of(Person.class));
 
-    // The refusal exists because hydration would drop the embedded value silently. Counting and
-    // probing hydrate nothing, so refusing them would cost a capability and buy no safety.
+    // The refusal exists because hydration would drop the embedded value silently; counting and
+    // probing hydrate nothing.
     assertThatNoException().isThrownBy(() -> executor.count(people));
     assertThatNoException().isThrownBy(() -> executor.exists(people));
 
     assertThatExceptionOfType(IllegalArgumentException.class)
         .isThrownBy(() -> executor.all(people))
         .withMessageContaining("embedded");
+  }
+
+  @Test
+  void pageReportsTheSameRefusalThroughThePublisherRatherThanByThrowing() {
+    // page() takes request data, so it has one failure channel where the others have two. Pinned in
+    // both directions: this description throws from all() and signals from page().
+    FluentSelect<Person> people = FluentSelect.from(EntityRef.of(Person.class));
+
+    StepVerifier.create(executor.page(people, PageRequest.of(0, 10)))
+        .expectError(IllegalArgumentException.class)
+        .verify();
+  }
+
+  @Test
+  void aPageIsAlsoJustADescriptionUntilSomethingSubscribes() {
+    Mono<Page<Account>> unsubscribedPage =
+        executor.page(FluentSelect.from(ACCOUNT), PageRequest.of(0, 20));
+
+    assertThat(unsubscribedPage).isInstanceOf(Publisher.class);
+    assertThat(connectionFactory.connectionsRequested).isZero();
+  }
+
+  @Test
+  void aBadSortPropertyReachesTheCallerAsAnErrorSignalRatherThanAThrow() {
+    // A page request's sort property is data, not a programmer's ref, so the reactive rules put it
+    // in the publisher: a handler mapping it to 400 never sees a synchronous throw.
+    Mono<Page<Account>> page =
+        executor.page(FluentSelect.from(ACCOUNT), PageRequest.of(0, 10, Sort.by("nickname")));
+
+    StepVerifier.create(page).expectError(IllegalArgumentException.class).verify();
+    assertThat(connectionFactory.connectionsRequested).isZero();
+  }
+
+  @Test
+  void aPageRejectsAMissingDescriptionOrRequest() {
+    assertThatNullPointerException()
+        .isThrownBy(() -> executor.page(null, Pageable.unpaged()));
+    assertThatNullPointerException()
+        .isThrownBy(() -> executor.page(FluentSelect.from(ACCOUNT), null));
   }
 
   @Test
@@ -93,7 +137,10 @@ class ExecutorAssemblyTest {
     assertThatNullPointerException().isThrownBy(() -> executor.exists(null));
   }
 
-  /** Fails the moment anything asks for a connection, and records that it was asked. */
+  /**
+   * Records that it was asked, so a test can assert nothing subscribed.
+   */
+  @NullMarked
   private static final class RefusingConnectionFactory implements ConnectionFactory {
 
     private int connectionsRequested;

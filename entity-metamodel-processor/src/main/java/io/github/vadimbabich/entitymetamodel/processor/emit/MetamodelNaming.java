@@ -10,6 +10,8 @@ import java.util.List;
  */
 final class MetamodelNaming {
 
+  // Shares its two characters with the alias separator EntityAnalyzer reserves, and is unrelated to
+  // it: one names a Java type, the other splits a SQL identifier. Do not fold them together.
   private static final String SUFFIX = "__";
 
   private MetamodelNaming() {

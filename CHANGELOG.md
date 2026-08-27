@@ -31,8 +31,47 @@ table does not have. Whether a given value type is one column or another aggrega
 converters registered on the mapping context, so the answer comes from the context at resolution
 time rather than from a guess at generation time.
 
-Nothing executes queries yet. The first publication will be the version that does, rather than a
-milestone of parts — see [`ROADMAP.md`](ROADMAP.md).
+**`entity-metamodel-runtime-r2dbc` executes.** A description of a select — the entity, its joins,
+its filter, its sort and its page — is built as an immutable value that performs no I/O, rendered to
+SQL as a pure function of that value, and run by one executor the consumer wires themselves. What it
+covers: inner and left-outer joins from declared relationships or from a condition the caller states;
+the same table joined any number of times under distinct instances, with filters on the same column
+of each; bind values inside a `JOIN … ON`; a filter vocabulary of equality, ranges, `IN`, `LIKE`,
+null tests, column-to-column equality and negation, composed with `and`/`or` and parenthesised by
+construction so an `OR` cannot widen a match by re-associating; a mirror count that reuses the page's
+own conditions; two instances of one table hydrated from a single row, each from its own labels; a
+typed sort, a sort whose property arrives as text from a `Pageable`, and a raw-expression sort;
+`Page`, `list`, `one`, `first`, `count` and `exists` terminals returning cold publishers, with no
+scheduler, timeout, retry or transaction anywhere in the library. A `Criteria` an application already
+builds is accepted unchanged, so a filter layer that works does not have to be rewritten — including
+an empty selection, which matches nothing exactly as it does through the substrate's own template.
+
+One thing to know before joining: a join to a to-many side multiplies rows, so the selected entity
+comes back once per matching counterpart — a list carries duplicates and a page's total counts those
+rows rather than entities. That is what the SQL says, and there is no `DISTINCT` to undo it, so a
+join here expands rather than restricts; asking for "parents that have a child" is an `EXISTS`
+fragment through the raw door.
+
+Two things it deliberately does not do. It has no aggregate API: a raw-SQL door takes the cases the
+typed vocabulary cannot express, and every `?` in one of those fragments takes either a value to bind
+or a property whose column the library writes itself — so a fragment never spells out a table alias.
+And it never chooses a thread: no substrate SQL type appears in a public signature, and nothing about
+latency, retries or caching is decided for the consumer.
+
+Where a projected label would pass the 63 bytes PostgreSQL silently truncates identifiers to, the
+whole statement switches to positional table aliases. Without that, two labels agreeing in their
+first 63 bytes become one column and an entity hydrates with a null field whose value is in the row —
+demonstrated against PostgreSQL 16, which is why the rule is whole-statement rather than per-table.
+A column name so long that no alias leaves room for a prefix is reported when something projects it,
+instead of being rendered and truncated — joining such a table to filter on it is unaffected, because
+no label of its is emitted.
+
+A page request's sort leads any sort the description already carries, and a sort property the entity
+does not persist arrives as an error signal on the returned publisher rather than as a thrown
+exception — it is request data, so a handler can map it to a bad-request response.
+
+Nothing is published yet. The first publication will be the version that generates *and* executes,
+rather than a milestone of parts — see [`ROADMAP.md`](ROADMAP.md).
 
 ## 1.1.0 — 2026-08-15
 

@@ -49,7 +49,25 @@
     <dependency>
       <groupId>org.springframework.data</groupId>
       <artifactId>spring-data-r2dbc</artifactId>
-      <version>${spring-data-r2dbc.version}</version>
+      <version>${spring-data.version}</version>
+    </dependency>
+
+    <!-- Declared directly because DatabaseClient appears in this module's own public signatures and
+         its bind-marker types carry every value it renders. It resolves transitively through
+         spring-data-r2dbc, so the version moves with that line rather than independently. -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-r2dbc</artifactId>
+      <version>${spring-r2dbc.version}</version>
+    </dependency>
+
+    <!-- Declared directly because Page/Pageable appear in this module's own public signatures. It
+         resolves transitively through spring-data-r2dbc anyway, so the version must move with that
+         line: the three artifacts ship as one release train and mixing them is unsupported. -->
+    <dependency>
+      <groupId>org.springframework.data</groupId>
+      <artifactId>spring-data-commons</artifactId>
+      <version>${spring-data.version}</version>
     </dependency>
 
     <!-- Declared directly because Mono/Flux appear in this module's own public signatures. -->

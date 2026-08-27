@@ -31,9 +31,9 @@ import javax.tools.Diagnostic;
  */
 public final class EntityAnalyzer {
 
-  // The runtime reserves this as its projected-label separator and rejects it in an alias — which a
-  // generated metamodel would otherwise discover only when its static initializer ran.
-  private static final String RESERVED_SEPARATOR = "__";
+  // Copied rather than referenced: the runtime is test-scope here. A contract test holds the two in
+  // step, since a divergence is an entity this processor accepts and the runtime rejects at load.
+  static final String RESERVED_SEPARATOR = "__";
 
   private static final String OBJECT = "java.lang.Object";
   private static final String RECORD = "java.lang.Record";
@@ -85,7 +85,9 @@ public final class EntityAnalyzer {
     return false;
   }
 
-  /** Empty when the entity cannot be read faithfully; the reason is reported before returning. */
+  /**
+   * Empty when the entity cannot be read faithfully; the reason is reported before returning.
+   */
   public Optional<EntityDescriptor> analyze(TypeElement entity) {
     if (entity.getSimpleName().toString().contains(RESERVED_SEPARATOR)) {
       messager.printMessage(

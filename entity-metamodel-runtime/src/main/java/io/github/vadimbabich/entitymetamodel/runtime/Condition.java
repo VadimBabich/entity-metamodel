@@ -3,15 +3,16 @@ package io.github.vadimbabich.entitymetamodel.runtime;
 import java.util.Objects;
 
 /**
- * Immutable description of a boolean predicate over entity properties. A condition names properties,
- * an operator and values and nothing else; rendering it to SQL belongs to an execution module, which
- * is what keeps every substrate type out of this module's public API.
+ * Immutable description of a boolean predicate over entity properties — names, an operator and
+ * values, nothing else. Rendering belongs to an execution module, which is what keeps substrate
+ * types out of this module's API.
  *
- * <p>Composition builds a {@link Junction} tree rather than flattening into a list, so a renderer
- * always knows where one operand ends. An OR folded into a surrounding AND without that boundary
- * re-associates under SQL's precedence rules and silently widens the match.
+ * <p>Composition builds a {@link Junction} tree rather than a flat list, so a renderer knows where
+ * one operand ends: an OR folded into a surrounding AND without that boundary re-associates under
+ * SQL precedence and silently widens the match.
  */
-public sealed interface Condition permits Comparison, Inclusion, Junction, NullCheck, SqlExpr {
+public sealed interface Condition
+    permits Comparison, Inclusion, Junction, Negation, NullCheck, PropertyEquality, SqlExpr {
 
   default Condition and(Condition other) {
     Objects.requireNonNull(other, "other");
@@ -23,5 +24,13 @@ public sealed interface Condition permits Comparison, Inclusion, Junction, NullC
     Objects.requireNonNull(other, "other");
 
     return new Junction(Junction.Operator.OR, this, other);
+  }
+
+  /**
+   * This condition inverted. Repeated negation is kept rather than folded away, since equality is
+   * what lets a derived statement recognise a condition it already carries.
+   */
+  default Condition not() {
+    return new Negation(this);
   }
 }
