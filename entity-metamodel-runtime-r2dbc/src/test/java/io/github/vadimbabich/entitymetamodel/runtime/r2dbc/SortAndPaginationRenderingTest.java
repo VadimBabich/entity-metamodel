@@ -4,8 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
+import io.github.vadimbabich.entitymetamodel.runtime.ExpressionSort;
 import io.github.vadimbabich.entitymetamodel.runtime.JoinRef;
 import io.github.vadimbabich.entitymetamodel.runtime.PropertyRef;
+import io.github.vadimbabich.entitymetamodel.runtime.SqlExpr;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Membership;
 import org.junit.jupiter.api.Test;
@@ -13,12 +15,8 @@ import org.springframework.data.r2dbc.dialect.PostgresDialect;
 import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
 /**
- * Sort and pagination close the bounded-page shape production actually asks for.
- *
- * <p>The limit clause is rendered through the dialect's own render context rather than the bare
- * renderer: the bare one emits the ANSI {@code FETCH FIRST n ROWS ONLY} form, which MySQL does not
- * accept, so a renderer holding a dialect and ignoring it would quietly emit SQL that fails on a
- * supported target.
+ * Sort and pagination, rendered through the dialect's own render context: the bare renderer emits
+ * the ANSI {@code FETCH FIRST n ROWS ONLY} form, which MySQL does not accept.
  */
 class SortAndPaginationRenderingTest {
 
@@ -55,6 +53,30 @@ class SortAndPaginationRenderingTest {
 
     assertThat(statement.sql())
         .endsWith("ORDER BY \"account\".\"owner_email\" ASC, \"account\".\"account_id\" DESC");
+  }
+
+  @Test
+  void anExpressionSortRendersItsFragmentWithTheInstancesColumnFilledIn() {
+    RenderedStatement statement =
+        renderer.render(
+            FluentSelect.from(ACCOUNT)
+                .orderBy(ExpressionSort.desc(SqlExpr.raw("length(?)", ownerEmail()))));
+
+    assertThat(statement.sql()).endsWith("ORDER BY length(\"account\".\"owner_email\") DESC");
+  }
+
+  @Test
+  void anExpressionSortAndATypedSortKeepTheOrderTheyWereGivenIn() {
+    RenderedStatement statement =
+        renderer.render(
+            FluentSelect.from(ACCOUNT)
+                .orderBy(
+                    ExpressionSort.asc(SqlExpr.raw("length(?)", ownerEmail())),
+                    accountId().desc()));
+
+    assertThat(statement.sql())
+        .endsWith(
+            "ORDER BY length(\"account\".\"owner_email\") ASC, \"account\".\"account_id\" DESC");
   }
 
   @Test
@@ -113,15 +135,23 @@ class SortAndPaginationRenderingTest {
 
   @Test
   void anExistenceProbeKeepsTheOffsetButDropsTheSort() {
-    // "Is there another page" is asked as exists(base.offset(pageEnd)). Dropping the offset turns
-    // it into "does anything match", so a paging control reports a next page forever. The sort
-    // genuinely does not matter: how many rows follow the first N does not depend on their order.
+    // "Is there another page" is exists(base.offset(pageEnd)); dropping the offset turns it into
+    // "does anything match", and a paging control reports a next page forever.
     RenderedStatement statement =
         renderer.renderExistsProbe(
             FluentSelect.from(ACCOUNT).orderBy(ownerEmail().asc()).limit(10).offset(20));
 
     assertThat(statement.sql()).doesNotContain("ORDER BY");
     assertThat(statement.sql()).endsWith("LIMIT 1 OFFSET 20");
+  }
+
+  @Test
+  void anExistenceProbeNarrowsTheLimitAndNeverWidensIt() {
+    // limit(0) says "no rows", and LIMIT 1 would answer true for a query that selects nothing.
+    assertThat(renderer.renderExistsProbe(FluentSelect.from(ACCOUNT).limit(0)).sql())
+        .endsWith("LIMIT 0");
+    assertThat(renderer.renderExistsProbe(FluentSelect.from(ACCOUNT).limit(5)).sql())
+        .endsWith("LIMIT 1");
   }
 
   @Test

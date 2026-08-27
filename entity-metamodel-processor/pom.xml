@@ -39,7 +39,7 @@
     <dependency>
       <groupId>org.springframework.data</groupId>
       <artifactId>spring-data-relational</artifactId>
-      <version>${spring-data-relational.version}</version>
+      <version>${spring-data.version}</version>
       <scope>test</scope>
     </dependency>
 

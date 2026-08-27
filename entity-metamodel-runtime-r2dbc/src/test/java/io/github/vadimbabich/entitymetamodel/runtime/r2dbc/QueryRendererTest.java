@@ -13,15 +13,11 @@ import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
 /**
  * Rendering is a pure function of the description: no connection, no database, no Spring context.
- *
- * <p>Table names appear quoted because the statement is rendered through the dialect's render
- * context rather than the bare renderer: the bare one cannot emit a dialect's limit clause, and
- * producing SQL a database will actually run is what decides between the two layers.
+ * Names appear quoted because the statement renders through the dialect's render context.
  *
  * <p>The load-bearing case is
- * {@link #anOrOperandIsParenthesisedSoItCannotEscapeASurroundingAnd()}. Composing an OR into a
- * larger condition without grouping lets SQL's AND-over-OR precedence re-associate the clause and
- * widen the match silently, so the grouping is pinned by exact SQL rather than trusted.
+ * {@link #anOrOperandIsParenthesisedSoItCannotEscapeASurroundingAnd()}: an ungrouped OR lets
+ * AND-over-OR precedence widen the match silently, so the grouping is pinned by exact SQL.
  */
 class QueryRendererTest {
 
@@ -103,6 +99,35 @@ class QueryRendererTest {
             "WHERE (\"account\".\"account_id\" > $1)"
                 + " AND ((\"account\".\"owner_email\" = $2)"
                 + " OR (\"account\".\"owner_email\" = $3))");
+  }
+
+  @Test
+  void aNegatedConditionIsGroupedSoTheNotCoversAllOfIt() {
+    Condition eitherEmail =
+        ownerEmail().is("first@example.com").or(ownerEmail().is("second@example.com"));
+
+    RenderedStatement statement =
+        renderer.render(FluentSelect.from(ACCOUNT).where(eitherEmail.not()));
+
+    assertThat(statement.sql())
+        .endsWith(
+            "WHERE NOT ((\"account\".\"owner_email\" = $1)"
+                + " OR (\"account\".\"owner_email\" = $2))");
+    assertThat(statement.values()).containsExactly("first@example.com", "second@example.com");
+  }
+
+  @Test
+  void aNegatedConditionComposedIntoAJunctionKeepsBothGroupings() {
+    Condition activeAndNotExcluded = id().gt(0L).and(id().in(List.of(7L, 8L)).not());
+
+    RenderedStatement statement =
+        renderer.render(FluentSelect.from(ACCOUNT).where(activeAndNotExcluded));
+
+    assertThat(statement.sql())
+        .endsWith(
+            "WHERE (\"account\".\"account_id\" > $1)"
+                + " AND (NOT (\"account\".\"account_id\" IN ($2, $3)))");
+    assertThat(statement.values()).containsExactly(0L, 7L, 8L);
   }
 
   @Test

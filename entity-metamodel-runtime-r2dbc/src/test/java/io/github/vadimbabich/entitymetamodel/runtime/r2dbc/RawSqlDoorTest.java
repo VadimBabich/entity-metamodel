@@ -1,6 +1,7 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import io.github.vadimbabich.entitymetamodel.runtime.Condition;
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
@@ -11,12 +12,9 @@ import org.springframework.data.r2dbc.dialect.PostgresDialect;
 import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
 /**
- * The escape hatch for what the closed algebra cannot express. It is an owned type by construction,
- * so no substrate expression ever appears in a public signature, and the fragment is a template:
- * placeholders become the dialect's markers and the values travel as binds.
- *
- * <p>{@link #aValueThatLooksLikeSqlIsStillOnlyAValue()} is the reason the door is shaped this way
- * rather than as string concatenation.
+ * The escape hatch for what the closed algebra cannot express.
+ * {@link #aValueThatLooksLikeSqlIsStillOnlyAValue()} is why it is a template rather than string
+ * concatenation.
  */
 class RawSqlDoorTest {
 
@@ -65,6 +63,33 @@ class RawSqlDoorTest {
 
     assertThat(statement.sql()).endsWith("WHERE owner_email IS NOT NULL");
     assertThat(statement.values()).isEmpty();
+  }
+
+  @Test
+  void aPropertyArgumentBecomesItsInstancesColumnRatherThanABoundValue() {
+    Condition lowercasedMatch =
+        SqlExpr.raw(
+            "lower(?) = lower(?)",
+            ACCOUNT.property("ownerEmail", String.class),
+            "OWNER@example.com");
+
+    RenderedStatement statement =
+        renderer.render(FluentSelect.from(ACCOUNT).where(lowercasedMatch));
+
+    assertThat(statement.sql())
+        .endsWith("WHERE lower(\"account\".\"owner_email\") = lower($1)");
+    assertThat(statement.values()).containsExactly("OWNER@example.com");
+  }
+
+  @Test
+  void aFragmentNamingAnInstanceTheStatementNeverCarriesIsRejected() {
+    EntityRef<Account> sponsor = ACCOUNT.as("sponsor");
+    Condition sponsorEmail =
+        SqlExpr.raw("? IS NOT NULL", sponsor.property("ownerEmail", String.class));
+
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> renderer.render(FluentSelect.from(ACCOUNT).where(sponsorEmail)))
+        .withMessageContaining("not part of this statement");
   }
 
   @Test

@@ -1,20 +1,16 @@
 package io.github.vadimbabich.entitymetamodel.runtime;
 
-import java.util.Objects;
-
 /**
- * One property to sort by, and which way. Named for the sort rather than for "order" alone, which
- * in an entity metamodel would read as a business order.
+ * One term of a statement's sort — a property of a table instance, or a raw expression for what the
+ * typed vocabulary cannot say. Named for the sort, since "order" alone would read as a business
+ * order here.
  */
-public record SortOrder(PropertyRef<?, ?> property, Direction direction) {
+public sealed interface SortOrder permits PropertySort, ExpressionSort {
 
-  public enum Direction {
+  enum Direction {
     ASCENDING,
     DESCENDING,
   }
 
-  public SortOrder {
-    Objects.requireNonNull(property, "property");
-    Objects.requireNonNull(direction, "direction");
-  }
+  Direction direction();
 }

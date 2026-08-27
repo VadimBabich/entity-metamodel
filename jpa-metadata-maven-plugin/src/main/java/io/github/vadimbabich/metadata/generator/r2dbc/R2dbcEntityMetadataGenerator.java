@@ -197,6 +197,8 @@ public class R2dbcEntityMetadataGenerator implements EntityMetadataGenerator {
 
   private String toConstantName(String fieldName) {
     return fieldName
+        // Also implemented by entity-metamodel-processor (ConstantNames); the two are byte-compared
+        // against golden corpora that must agree, and no dependency links them. Change both.
         .replaceAll("([a-z0-9])([A-Z])", "$1_$2")
         .replaceAll("([A-Z])([A-Z][a-z])", "$1_$2")
         .toUpperCase(Locale.ROOT);
@@ -211,5 +213,4 @@ public class R2dbcEntityMetadataGenerator implements EntityMetadataGenerator {
   private <T, R> Function<T, Set<R>> safeResolver(Function<T, Set<R>> resolver) {
     return t -> Optional.ofNullable(resolver.apply(t)).orElse(Set.of());
   }
-
 }

@@ -3,10 +3,14 @@ package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 import io.github.vadimbabich.entitymetamodel.runtime.Comparison;
 import io.github.vadimbabich.entitymetamodel.runtime.Condition;
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
+import io.github.vadimbabich.entitymetamodel.runtime.ExpressionSort;
 import io.github.vadimbabich.entitymetamodel.runtime.Inclusion;
 import io.github.vadimbabich.entitymetamodel.runtime.Junction;
+import io.github.vadimbabich.entitymetamodel.runtime.Negation;
 import io.github.vadimbabich.entitymetamodel.runtime.NullCheck;
+import io.github.vadimbabich.entitymetamodel.runtime.PropertyEquality;
 import io.github.vadimbabich.entitymetamodel.runtime.PropertyRef;
+import io.github.vadimbabich.entitymetamodel.runtime.PropertySort;
 import io.github.vadimbabich.entitymetamodel.runtime.SortOrder;
 import io.github.vadimbabich.entitymetamodel.runtime.SqlExpr;
 import java.util.ArrayList;
@@ -24,12 +28,14 @@ import org.springframework.data.relational.core.mapping.RelationalPersistentProp
 import org.springframework.data.relational.core.sql.Column;
 import org.springframework.data.relational.core.sql.Conditions;
 import org.springframework.data.relational.core.sql.Expression;
+import org.springframework.data.relational.core.sql.Expressions;
 import org.springframework.data.relational.core.sql.Functions;
+import org.springframework.data.relational.core.sql.IdentifierProcessing;
 import org.springframework.data.relational.core.sql.OrderByField;
 import org.springframework.data.relational.core.sql.SQL;
 import org.springframework.data.relational.core.sql.Select;
-import org.springframework.data.relational.core.sql.SqlIdentifier;
 import org.springframework.data.relational.core.sql.SelectBuilder;
+import org.springframework.data.relational.core.sql.SqlIdentifier;
 import org.springframework.data.relational.core.sql.StatementBuilder;
 import org.springframework.data.relational.core.sql.Table;
 import org.springframework.data.relational.core.sql.render.SqlRenderer;
@@ -38,123 +44,140 @@ import org.springframework.r2dbc.core.binding.BindMarkers;
 import org.springframework.r2dbc.core.binding.BindMarkersFactory;
 
 /**
- * Renders a {@link FluentSelect} description into SQL and its ordered bind values. Rendering is a
- * pure function of the description and touches no connection.
+ * Renders a {@link FluentSelect} description into SQL and its ordered bind values, as a pure
+ * function of the description.
  *
- * <p>Spring's SQL AST types are spelled out in full below rather than imported: they must never
- * appear in a public signature, and the package at every use is the reminder that they stop here.
- *
- * <p>Pass the application's configured mapping context. A bare
- * {@code new RelationalMappingContext()} knows no dialect simple types and will disagree with the
- * context the executor binds against.
+ * <p>Pass the application's configured mapping context: a bare one knows no dialect simple types
+ * and will disagree with the context the executor binds against. Spring's SQL AST types are spelled
+ * out in full below rather than imported, as a reminder that they stop here.
  */
 public final class QueryRenderer {
 
   private final RelationalMappingContext mappingContext;
+  private final AliasScheme aliasScheme;
   private final BindMarkersFactory bindMarkersFactory;
+  private final IdentifierProcessing identifierProcessing;
   private final SqlRenderer sqlRenderer;
 
   public QueryRenderer(RelationalMappingContext mappingContext, R2dbcDialect dialect) {
     Objects.requireNonNull(dialect, "dialect");
 
     this.mappingContext = Objects.requireNonNull(mappingContext, "mappingContext");
+    this.aliasScheme = new AliasScheme(this.mappingContext);
     this.bindMarkersFactory = dialect.getBindMarkersFactory();
+    this.identifierProcessing = dialect.getIdentifierProcessing();
 
     // The dialect's context, not the bare renderer: the bare one emits ANSI
     // 'OFFSET n ROWS FETCH FIRST m ROWS ONLY', which MySQL rejects.
     this.sqlRenderer = SqlRenderer.create(new RenderContextFactory(dialect).createRenderContext());
   }
 
+  // Shared with the executor's name resolution: a name this renderer cannot resolve must not be a
+  // name something else accepted.
+  RelationalMappingContext mappingContext() {
+    return mappingContext;
+  }
+
   public RenderedStatement render(FluentSelect<?> select) {
     Objects.requireNonNull(select, "select");
 
-    RenderPass pass = new RenderPass(tablesOf(select), bindMarkersFactory.create());
+    RenderPass pass = passOver(select);
     Select statement = buildStatement(select, projectionOf(select, pass), pass);
 
-    return new RenderedStatement(sqlRenderer.render(statement), pass.bindings());
+    return statementOf(statement, pass);
   }
 
   /**
    * The total behind a page: the same FROM, joins and filter, projected as a count. Sort and paging
-   * come off the description rather than being skipped, so the count cannot drift from its page.
+   * come off the description, so the count cannot drift from its page.
    */
   public RenderedStatement renderCount(FluentSelect<?> select) {
     Objects.requireNonNull(select, "select");
 
     FluentSelect<?> wholeFilteredSet = select.withoutSortAndPaging();
-    RenderPass pass = new RenderPass(tablesOf(wholeFilteredSet), bindMarkersFactory.create());
+    RenderPass pass = passOver(wholeFilteredSet);
     List<Expression> countProjection = List.of(Functions.count(SQL.literalOf(1)));
 
     Select statement = buildStatement(wholeFilteredSet, countProjection, pass);
 
-    return new RenderedStatement(sqlRenderer.render(statement), pass.bindings());
+    return statementOf(statement, pass);
   }
 
   /**
-   * Whether anything matches, as a single row of a literal. Like a count it projects no entity
-   * column, so it neither needs nor pays for the selected entity's projection.
-   *
-   * <p>Any offset is kept, because {@code exists(page.offset(end))} is how "is there another page"
-   * is asked; dropping it would answer "does anything match" and report a next page forever.
+   * Whether anything matches, as a single row of a literal — no entity column projected. The offset
+   * is kept: {@code exists(page.offset(end))} is how "is there another page" is asked.
    */
   public RenderedStatement renderExistsProbe(FluentSelect<?> select) {
     Objects.requireNonNull(select, "select");
 
-    FluentSelect<?> onePage = select.withoutSort().limit(1);
-    RenderPass pass = new RenderPass(tablesOf(onePage), bindMarkersFactory.create());
+    FluentSelect<?> onePage = select.withoutSort().withAtMostOneRow();
+    RenderPass pass = passOver(onePage);
 
     Select statement = buildStatement(onePage, List.of(SQL.literalOf(1)), pass);
 
-    return new RenderedStatement(sqlRenderer.render(statement), pass.bindings());
+    return statementOf(statement, pass);
   }
 
-  /** Keyed by ref identity, which is what makes two instances of one table distinguishable. */
-  private Map<EntityRef<?>, Table> tablesOf(FluentSelect<?> select) {
+  // A pattern switch would make these unreachable by construction, but needs Java 21 and this
+  // module compiles at release 17 where that syntax is preview only. Revisit if the floor rises.
+  private static IllegalStateException unhandledVariant(String kind, Object variant) {
+    return new IllegalStateException(
+        "No rendering for " + kind + " variant " + variant.getClass().getName()
+            + ": the sealed hierarchy grew and this renderer did not follow");
+  }
+
+  private RenderedStatement statementOf(Select statement, RenderPass pass) {
+    return new RenderedStatement(sqlRenderer.render(statement), pass.bindings(), pass.aliases());
+  }
+
+  private RenderPass passOver(FluentSelect<?> select) {
+    List<EntityRef<?>> instances = instancesOf(select);
+    StatementAliases aliases = aliasScheme.forInstances(instances);
+
     Map<EntityRef<?>, Table> tables = new LinkedHashMap<>();
+    for (EntityRef<?> instance : instances) {
+      tables.put(instance, tableFor(instance, aliases));
+    }
+
+    return new RenderPass(tables, aliases, bindMarkersFactory.create());
+  }
+
+  // First-reference order, which is what makes a positional alias assignment deterministic. Refs
+  // are distinct per (type, alias) but SQL knows only the alias, so two entity types sharing a
+  // simple name claim one alias — caught here, because the driver would name neither type.
+  private List<EntityRef<?>> instancesOf(FluentSelect<?> select) {
     Map<String, EntityRef<?>> byAlias = new LinkedHashMap<>();
 
-    addTable(select.entity(), tables, byAlias);
-    for (TableJoin<?> join : select.joins()) {
-      addTable(join.targetInstance(), tables, byAlias);
+    List<EntityRef<?>> instances = select.instances();
+
+    for (EntityRef<?> instance : instances) {
+      EntityRef<?> claimed = byAlias.putIfAbsent(instance.alias(), instance);
+
+      if (claimed != null && !claimed.equals(instance)) {
+        throw new IllegalArgumentException(
+            instance.entityType().getName() + " and " + claimed.entityType().getName()
+                + " both use the alias '" + instance.alias() + "'; give one of them a distinct"
+                + " instance with EntityRef.as(...)");
+      }
     }
 
-    return tables;
+    return instances;
   }
 
-  /**
-   * Refs are distinct per (type, alias) but SQL knows only the alias, so two entity types sharing a
-   * simple name reach here as different instances carrying one alias. Caught here rather than left
-   * to the driver, which reports a duplicate table name and names neither type.
-   */
-  private void addTable(
-      EntityRef<?> instance, Map<EntityRef<?>, Table> tables, Map<String, EntityRef<?>> byAlias) {
-
-    EntityRef<?> claimed = byAlias.putIfAbsent(instance.alias(), instance);
-    if (claimed != null && !claimed.equals(instance)) {
-      throw new IllegalArgumentException(
-          instance.entityType().getName() + " and " + claimed.entityType().getName()
-              + " both use the alias '" + instance.alias() + "'; give one of them a distinct"
-              + " instance with EntityRef.as(...)");
-    }
-
-    tables.put(instance, tableFor(instance));
-  }
-
-  private Table tableFor(EntityRef<?> instance) {
+  private Table tableFor(EntityRef<?> instance, StatementAliases aliases) {
     RelationalPersistentEntity<?> persistentEntity =
         mappingContext.getRequiredPersistentEntity(instance.entityType());
 
     // Quoted: an alias derived from a class named Order or User is a keyword, and unquoted it
     // makes the statement unparseable rather than merely odd.
     return Table.create(persistentEntity.getTableName())
-        .as(SqlIdentifier.quoted(instance.alias()));
+        .as(SqlIdentifier.quoted(aliases.aliasOf(instance)));
   }
 
   private Select buildStatement(
       FluentSelect<?> select, List<Expression> projection, RenderPass pass) {
 
-    // Here rather than while projecting, so a count and its page accept the same descriptions —
-    // a count builds no projection and would otherwise skip the check.
+    // Here rather than while projecting, so a count accepts the same descriptions as its page.
     for (EntityRef<?> alsoSelected : select.alsoSelected()) {
       pass.tableOf(alsoSelected);
     }
@@ -162,9 +185,9 @@ public final class QueryRenderer {
     SelectBuilder.SelectFromAndJoin fromClause =
         StatementBuilder.select(projection).from(pass.tableOf(select.entity()));
 
-    // Paging is applied before the joins and the filter because the staged builder offers limit and
-    // offset only on the from/join stages — SelectWhereAndOr has neither. The renderer still places
-    // them last in the SQL, so do not "correct" these calls into SQL order.
+    // Before the joins and the filter because the staged builder offers limit and offset only on
+    // the from/join stages. The SQL still places them last, so do not "correct" this into SQL
+    // order.
     SelectBuilder.SelectFromAndJoin pagedClause = applyPaging(fromClause, select);
 
     return applyWhereAndSort(applyJoins(pagedClause, select, pass), select, pass);
@@ -191,29 +214,24 @@ public final class QueryRenderer {
   private SelectBuilder.SelectWhere applyJoins(
       SelectBuilder.SelectFromAndJoin stage, FluentSelect<?> select, RenderPass pass) {
 
-    List<TableJoin<?>> joins = select.joins();
+    List<TableJoin> joins = select.joins();
     if (joins.isEmpty()) {
       return stage;
     }
 
     SelectBuilder.SelectFromAndJoinCondition joinedClause = applyJoin(stage, joins.get(0), pass);
-    for (TableJoin<?> furtherJoin : joins.subList(1, joins.size())) {
+    for (TableJoin furtherJoin : joins.subList(1, joins.size())) {
       joinedClause = applyJoin(joinedClause, furtherJoin, pass);
     }
 
     return joinedClause;
   }
 
-  /** Re-anchoring the target column to the joined instance is how one relationship reaches N. */
-  private <T> SelectBuilder.SelectFromAndJoinCondition applyJoin(
-      SelectBuilder.SelectJoin stage, TableJoin<T> join, RenderPass pass) {
-
-    Column sourceColumn = columnFor(join.relationship().source(), pass);
-    Column targetColumn =
-        columnFor(join.relationship().target().of(join.targetInstance()), pass);
+  private SelectBuilder.SelectFromAndJoinCondition applyJoin(
+      SelectBuilder.SelectJoin stage, TableJoin join, RenderPass pass) {
 
     org.springframework.data.relational.core.sql.Condition onCondition =
-        Conditions.isEqual(sourceColumn, targetColumn);
+        translate(join.onCondition(), pass);
     Table joinedTable = pass.tableOf(join.targetInstance());
 
     return switch (join.kind()) {
@@ -244,12 +262,23 @@ public final class QueryRenderer {
     List<OrderByField> fields = new ArrayList<>();
 
     for (SortOrder sortOrder : sortOrders) {
-      OrderByField undirected = OrderByField.from(columnFor(sortOrder.property(), pass));
+      OrderByField undirected = OrderByField.from(sortExpressionOf(sortOrder, pass));
 
       fields.add(directed(undirected, sortOrder.direction()));
     }
 
     return fields;
+  }
+
+  private Expression sortExpressionOf(SortOrder sortOrder, RenderPass pass) {
+    if (sortOrder instanceof PropertySort propertySort) {
+      return columnFor(propertySort.property(), pass);
+    }
+    if (sortOrder instanceof ExpressionSort expressionSort) {
+      return Expressions.just(assembleFragment(expressionSort.expression(), pass));
+    }
+
+    throw unhandledVariant("sort", sortOrder);
   }
 
   private static OrderByField directed(OrderByField field, SortOrder.Direction direction) {
@@ -269,11 +298,9 @@ public final class QueryRenderer {
     return projection;
   }
 
-  /**
-   * A relationship is skipped — its value lives in the referenced table. An embedded value is
-   * refused, because the opposite is true of it and projecting nothing would hydrate the field as
-   * null with no error anywhere. Both report {@code isEntity()}, so the embedded check comes first.
-   */
+  // A relationship is skipped: its value lives in the referenced table. An embedded value is
+  // refused, since projecting nothing would hydrate the field as null with no error. Both report
+  // isEntity(), so the embedded check comes first.
   private List<Expression> columnsOf(EntityRef<?> instance, RenderPass pass) {
     RelationalPersistentEntity<?> persistentEntity =
         mappingContext.getRequiredPersistentEntity(instance.entityType());
@@ -293,11 +320,14 @@ public final class QueryRenderer {
       }
 
       SqlIdentifier columnName = property.getColumnName();
+      String label = pass.projectedLabel(instance, columnName.getReference());
 
-      columns.add(
-          table
-              .column(columnName)
-              .as(SqlIdentifier.quoted(instance.projectedLabel(columnName.getReference()))));
+      // Here rather than where the alias scheme is chosen: an instance joined only to filter emits
+      // no label, so measuring it would refuse a statement that renders correctly.
+      aliasScheme.rejectUnrenderableLabel(
+          label, instance.entityType().getSimpleName() + "." + property.getName());
+
+      columns.add(table.column(columnName).as(SqlIdentifier.quoted(label)));
     }
 
     return columns;
@@ -312,19 +342,24 @@ public final class QueryRenderer {
     if (condition instanceof Inclusion inclusion) {
       return translateInclusion(inclusion, pass);
     }
+    if (condition instanceof PropertyEquality propertyEquality) {
+      return Conditions.isEqual(
+          columnFor(propertyEquality.left(), pass), columnFor(propertyEquality.right(), pass));
+    }
     if (condition instanceof NullCheck nullCheck) {
       return Conditions.isNull(columnFor(nullCheck.property(), pass));
     }
     if (condition instanceof Junction junction) {
       return translateJunction(junction, pass);
     }
+    if (condition instanceof Negation negation) {
+      return translateNegation(negation, pass);
+    }
     if (condition instanceof SqlExpr rawFragment) {
       return translateRawFragment(rawFragment, pass);
     }
 
-    throw new IllegalStateException(
-        "No rendering for condition variant " + condition.getClass().getName()
-            + ": the sealed hierarchy grew and this renderer did not follow");
+    throw unhandledVariant("condition", condition);
   }
 
   private org.springframework.data.relational.core.sql.Condition translateComparison(
@@ -357,10 +392,9 @@ public final class QueryRenderer {
   private org.springframework.data.relational.core.sql.Condition translateJunction(
       Junction junction, RenderPass pass) {
 
-    // Both operands are nested. Left un-grouped, SQL's AND-over-OR precedence re-associates the
-    // clause and an OR operand escapes its junction, widening the match with no error anywhere.
-    // Do not "simplify" this by nesting only the OR side: which side needs grouping depends on the
-    // parent, which a recursive translation cannot see.
+    // Both operands, always. Un-grouped, AND-over-OR precedence lets an OR operand escape its
+    // junction and widen the match silently. Do not "simplify" to nesting only the OR side: which
+    // side needs grouping depends on the parent, which a recursive translation cannot see.
     org.springframework.data.relational.core.sql.Condition left =
         Conditions.nest(translate(junction.left(), pass));
     org.springframework.data.relational.core.sql.Condition right =
@@ -372,34 +406,61 @@ public final class QueryRenderer {
     };
   }
 
-  /**
-   * Only the markers are written into the fragment text; the values go through the bind path, which
-   * is what keeps a value that looks like SQL from becoming SQL.
-   */
+  // Nested for the same reason a junction's operands are: NOT binds tighter than AND, so an
+  // un-grouped conjunction underneath would be negated in its first term only.
+  private org.springframework.data.relational.core.sql.Condition translateNegation(
+      Negation negation, RenderPass pass) {
+
+    return Conditions.not(Conditions.nest(translate(negation.condition(), pass)));
+  }
+
+  // Only markers reach the fragment text; values go through the bind path, which is what keeps a
+  // value that looks like SQL from becoming SQL.
   private org.springframework.data.relational.core.sql.Condition translateRawFragment(
       SqlExpr rawFragment, RenderPass pass) {
 
+    return Conditions.just(assembleFragment(rawFragment, pass));
+  }
+
+  private String assembleFragment(SqlExpr rawFragment, RenderPass pass) {
     String[] literalParts = rawFragment.sql().split("\\?", -1);
     StringBuilder assembled = new StringBuilder(literalParts[0]);
 
-    for (int placeholder = 0; placeholder < rawFragment.bindings().size(); placeholder++) {
-      String markerText = pass.bindPlaceholder(rawFragment.bindings().get(placeholder));
-
-      assembled.append(markerText).append(literalParts[placeholder + 1]);
+    List<Object> arguments = rawFragment.arguments();
+    for (int placeholder = 0; placeholder < arguments.size(); placeholder++) {
+      assembled
+          .append(placeholderTextFor(arguments.get(placeholder), pass))
+          .append(literalParts[placeholder + 1]);
     }
 
-    return Conditions.just(assembled.toString());
+    return assembled.toString();
+  }
+
+  // A property becomes the instance's qualified column, anything else a marker. Rendering the
+  // column here rather than letting the caller write the alias is what keeps a fragment working
+  // when the statement's aliases change, and it quotes the way the projection does.
+  private String placeholderTextFor(Object argument, RenderPass pass) {
+    if (argument instanceof PropertyRef<?, ?> property) {
+      // For its rejection of an instance the statement never named, which would otherwise reach the
+      // database as valid-looking SQL.
+      pass.tableOf(property.entity());
+
+      String tableAlias =
+          SqlIdentifier.quoted(pass.aliasOf(property.entity())).toSql(identifierProcessing);
+
+      return tableAlias + "." + columnIdentifierFor(property).toSql(identifierProcessing);
+    }
+
+    return pass.bindPlaceholder(argument);
   }
 
   private Column columnFor(PropertyRef<?, ?> property, RenderPass pass) {
     return pass.tableOf(property.entity()).column(columnIdentifierFor(property));
   }
 
-  /**
-   * Resolved twice on purpose. {@link PropertyRef#columnName} owns the rules about what counts as a
-   * column and reports why when a property does not, but its {@code String} result cannot carry the
-   * quoting the context chose — and dropping that folds a mixed-case column out of existence.
-   */
+  // Resolved twice on purpose: PropertyRef#columnName owns the rules about what counts as a column
+  // and reports why when one does not, but its String result cannot carry the quoting the context
+  // chose, and dropping that folds a mixed-case column out of existence.
   private SqlIdentifier columnIdentifierFor(PropertyRef<?, ?> property) {
     property.columnName(mappingContext);
 
@@ -409,25 +470,37 @@ public final class QueryRenderer {
         .getColumnName();
   }
 
-  /**
-   * One pass over one statement. It owns the statement's only {@link BindMarkers} and accumulates
-   * values in allocation order, so marker {@code n} and binding {@code n} cannot drift apart.
-   */
+  // Owns the statement's only BindMarkers and accumulates values in allocation order, so marker n
+  // and binding n cannot drift apart.
   private static final class RenderPass {
 
     private final Map<EntityRef<?>, Table> tables;
+    private final StatementAliases aliases;
     private final BindMarkers markers;
     private final List<Binding> bindings = new ArrayList<>();
 
-    RenderPass(Map<EntityRef<?>, Table> tables, BindMarkers markers) {
+    RenderPass(
+        Map<EntityRef<?>, Table> tables, StatementAliases aliases, BindMarkers markers) {
+
       this.tables = tables;
+      this.aliases = aliases;
       this.markers = markers;
     }
 
-    /**
-     * Refuses an instance the statement never named. Falling back to the selected table would
-     * attribute one table's column to another and return plausible rows from the wrong side.
-     */
+    StatementAliases aliases() {
+      return aliases;
+    }
+
+    String aliasOf(EntityRef<?> instance) {
+      return aliases.aliasOf(instance);
+    }
+
+    String projectedLabel(EntityRef<?> instance, String columnName) {
+      return aliases.projectedLabel(instance, columnName);
+    }
+
+    // Falling back to the selected table would attribute one table's column to another and return
+    // plausible rows from the wrong side.
     Table tableOf(EntityRef<?> instance) {
       Table table = tables.get(instance);
 
@@ -440,7 +513,7 @@ public final class QueryRenderer {
       return table;
     }
 
-    /** Returns the marker's own placeholder text rather than an AST node's {@code toString()}. */
+    // The marker's own placeholder text, not an AST node's toString().
     String bindPlaceholder(Object value) {
       BindMarker marker = markers.next();
       String placeholder = marker.getPlaceholder();

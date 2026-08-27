@@ -24,7 +24,6 @@ public final class PropertyRef<E, T> {
     this.declaredRawType = declaredRawType;
   }
 
-  /** The Java property name — the drop-in replacement for every {@code nameOf(...)} argument. */
   public String name() {
     return propertyName;
   }
@@ -37,30 +36,40 @@ public final class PropertyRef<E, T> {
     return declaredRawType;
   }
 
-  /** Re-anchors this property to another instance of the same entity (self-join reads). */
+  /**
+   * Re-anchors this property to another instance of the same entity.
+   */
   public PropertyRef<E, T> of(EntityRef<E> instance) {
     Objects.requireNonNull(instance, "instance");
 
     return new PropertyRef<>(instance, propertyName, declaredRawType);
   }
 
-  /** Equality against one value; {@code null} is rejected — use {@link #isNull()}. */
+  /**
+   * Equality against one value; {@code null} is rejected — use {@link #isNull()}.
+   */
   public Condition is(T value) {
     return new Comparison(this, Comparison.Operator.EQUAL, value);
   }
 
   /**
-   * Membership in a set of values. Takes a collection because that is what call sites hold.
-   *
-   * <p>Each value becomes one bind parameter, and drivers cap how many a statement may carry — so
-   * a list sized by upstream data will eventually fail at execution, and degrades planning well
-   * before that. Feed this a bounded set; a large one belongs in a temporary table or an
-   * {@code = ANY(?)} through the raw door.
+   * Membership in a set of values. Feed it a bounded set: each value becomes one bind parameter,
+   * drivers cap how many a statement may carry, and planning degrades well before that cap.
    */
   public Condition in(Collection<? extends T> values) {
     Objects.requireNonNull(values, "values");
 
     return new Inclusion(this, List.copyOf(values));
+  }
+
+  /**
+   * Equality against another property, where both sides render as columns — {@link #is(Object)} is
+   * the value-taking half. The shared value type makes joining unrelated columns a compile error.
+   */
+  public Condition eq(PropertyRef<?, T> other) {
+    Objects.requireNonNull(other, "other");
+
+    return new PropertyEquality(this, other);
   }
 
   public Condition isNull() {
@@ -88,22 +97,20 @@ public final class PropertyRef<E, T> {
   }
 
   public SortOrder asc() {
-    return new SortOrder(this, SortOrder.Direction.ASCENDING);
+    return new PropertySort(this, SortOrder.Direction.ASCENDING);
   }
 
   public SortOrder desc() {
-    return new SortOrder(this, SortOrder.Direction.DESCENDING);
+    return new PropertySort(this, SortOrder.Direction.DESCENDING);
   }
 
   /**
    * Resolves the column name through the context, refusing anything that is not a column of the
-   * entity's own table. Pass the application's configured context: a bare
-   * {@code new RelationalMappingContext()} knows no dialect simple types and fails inside Spring on
-   * a {@code BigDecimal} or {@code UUID} first.
+   * entity's own table. Pass the application's configured context: a bare one knows no dialect
+   * simple types and fails on a {@code BigDecimal} or {@code UUID} first.
    *
-   * <p>A collection of simple values ({@code List<String>}) is the one case this cannot answer — an
-   * array column on one dialect, an element table on another — so treat the name it returns as
-   * unverified.
+   * <p>A collection of simple values is the one case this cannot answer — an array column on one
+   * dialect, an element table on another — so treat that name as unverified.
    */
   public String columnName(RelationalMappingContext mappingContext) {
     Objects.requireNonNull(mappingContext, "mappingContext");
@@ -118,9 +125,8 @@ public final class PropertyRef<E, T> {
           describe() + " is not persistent in this mapping context");
     }
 
-    // Neither an embedded value nor a relationship is a column, and the context calls both
-    // entities, so they need separate answers. The context is asked rather than the type inspected,
-    // so a value type the consumer converts to one column still resolves.
+    // Neither is a column, and the context calls both entities, so they need separate answers. The
+    // context is asked rather than the type inspected, so a converted value type still resolves.
     if (persistentProperty.isEmbedded()) {
       throw new IllegalArgumentException(
           describe()

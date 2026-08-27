@@ -6,6 +6,10 @@ import java.util.regex.Pattern;
 /**
  * Property name to member name, per the canonical UPPER_SNAKE transformation of Jakarta
  * Persistence 3.2 §5.1.1.
+ *
+ * <p>The two-pass rule below is also implemented by the retiring 1.x plugin ({@code
+ * R2dbcEntityMetadataGenerator}), whose golden corpus must agree with this one. No dependency links
+ * the modules, so change one acronym rule and change the other in the same commit.
  */
 final class ConstantNames {
 

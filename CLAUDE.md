@@ -49,6 +49,9 @@ correct side, and keep committed files free of references to the private side.
 
 - `docs/runbooks/golden-corpus-update.md` — the corpus procedure. Follow it rather than
   re-deriving it.
+- `docs/runbooks/front-door-docs.md` — keeping `README.md`, `ROADMAP.md` and `CHANGELOG.md` telling
+  one story. Run it whenever a capability, state word or floor changes; never update one of the
+  three alone.
 - `docs/reactive-code-style.md` — the reactive rule set (hand-written runtime, generated output,
   tests). Read it before writing or emitting a single reactive line; its §1 and §8 are contractual.
 - `docs/shell-code-style.md` — the shell rule set (guards, hooks, workflow `run:` blocks). Read §1
@@ -181,5 +184,9 @@ extend it when generator output changes.
 4. If you touched a shell script or a workflow `run:` block: `shellcheck -S style` must pass, and
    re-run the script's controls asserting **stderr as well as exit codes** (`docs/shell-code-style.md`
    §8). Workflow YAML changes get parsed before commit — a broken `run:` block only surfaces in CI.
-5. If the IDE MCP is unavailable, say so explicitly, fall back to `mvn -B verify` plus
-   `mcp__ide__getDiagnostics`, and never report inspections as run when they were not.
+5. The IDE MCP (`mcp__idea__*`) is available whenever IntelliJ has this project open — which is
+   the normal state here. In a harness that defers tool schemas (Claude Code), the tools appear
+   name-only until loaded (ToolSearch); a deferred schema is **not** unavailability. Declare the
+   IDE MCP unavailable only after an actual call has failed — then say so explicitly, fall back to
+   `mvn -B verify` plus `mcp__ide__getDiagnostics`, and never report inspections as run when they
+   were not.

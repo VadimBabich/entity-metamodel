@@ -4,29 +4,36 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * A rendered statement and the bindings its markers expect, in allocation order.
+ * A rendered statement, the bindings its markers expect in allocation order, and the alias each
+ * table instance was given in it — hydration reads what rendering assigned rather than deriving it
+ * again.
  *
- * <p>The {@link #preview()} pair is the inspection door: it answers "what will this send" without
- * the library logging anything itself, so the consumer keeps their own log policy.
+ * <p>{@link #preview()} answers "what will this send" without the library logging anything, so the
+ * consumer keeps their own log policy.
  */
-public record RenderedStatement(String sql, List<Binding> bindings) {
+public record RenderedStatement(
+    String sql, List<Binding> bindings, StatementAliases aliases) {
 
   private static final String REDACTED = "<redacted>";
 
   public RenderedStatement {
     Objects.requireNonNull(sql, "sql");
+    Objects.requireNonNull(aliases, "aliases");
+    Objects.requireNonNull(bindings, "bindings");
+
     bindings = List.copyOf(bindings);
   }
 
-  /** The expected values in marker order — what a positional binder consumes. */
+  /**
+   * The expected values in marker order, as a positional binder consumes them.
+   */
   public List<Object> values() {
     return bindings.stream().map(Binding::value).toList();
   }
 
   /**
-   * The statement and its markers, with values withheld. Safe to log: a preview is written far more
-   * often than it is read, and printing bind values would turn every filtered query into a record
-   * of whatever it filtered on.
+   * The statement and its markers, with values withheld. Safe to log: printing bind values would
+   * turn every filtered query into a record of whatever it filtered on.
    */
   public String preview() {
     StringBuilder description = new StringBuilder(sql);
@@ -38,7 +45,9 @@ public record RenderedStatement(String sql, List<Binding> bindings) {
     return description.toString();
   }
 
-  /** The same, showing the values — for somewhere their disclosure is already acceptable. */
+  /**
+   * The same, showing the values, for somewhere their disclosure is already acceptable.
+   */
   public String previewWithValues() {
     StringBuilder description = new StringBuilder(sql);
 

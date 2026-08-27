@@ -49,3 +49,10 @@ docs/repository/
 
 ### Maintainer-local agent rules: names private paths, so it must never be committed.
 CLAUDE.local.md
+
+### Inspection and scan exports. A report over this working tree embeds the private corpus — the
+### paths *and* source snippets of _doc/ — under an innocent filename that the CI guard, which
+### matches tracked paths rather than content, does not catch. This entry is the only thing between
+### a scan artifact and a licence breach.
+*.sarif
+*.sarif.json

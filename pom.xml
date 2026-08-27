@@ -70,11 +70,14 @@
 
     <junit.version>5.13.1</junit.version>
     <assertj-core.version>3.27.7</assertj-core.version>
-    <!-- Supported substrate range is Spring Data 4.0.x-4.1.x. The two Spring Data artifacts ship
-         from one reactor and must move together; Reactor is pinned to the version
-         spring-data-r2dbc itself declares, so the direct and transitive views agree. -->
-    <spring-data-relational.version>4.1.0</spring-data-relational.version>
-    <spring-data-r2dbc.version>4.1.0</spring-data-r2dbc.version>
+    <!-- Supported substrate range is Spring Data 4.0.x-4.1.x. One property for all three of its
+         artifacts on purpose: they ship as one release train and mixing them is unsupported, so a
+         tool that bumps dependencies one at a time must not be able to produce a mixed set — the
+         failure it would buy is a linkage error at runtime rather than a broken build. Reactor is
+         pinned to the version spring-data-r2dbc itself declares, so the direct and transitive
+         views agree. -->
+    <spring-data.version>4.1.0</spring-data.version>
+    <spring-r2dbc.version>7.0.8</spring-r2dbc.version>
     <reactor.version>3.8.6</reactor.version>
 
     <!-- Execution-layer test substrate only: Testcontainers PostgreSQL on the 2.x coordinates,
