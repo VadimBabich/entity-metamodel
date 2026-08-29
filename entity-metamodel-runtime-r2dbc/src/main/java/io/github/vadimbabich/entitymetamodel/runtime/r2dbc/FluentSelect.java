@@ -5,6 +5,7 @@ import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import io.github.vadimbabich.entitymetamodel.runtime.JoinRef;
 import io.github.vadimbabich.entitymetamodel.runtime.PropertyEquality;
 import io.github.vadimbabich.entitymetamodel.runtime.SortOrder;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -16,8 +17,9 @@ import java.util.OptionalLong;
  * no I/O. Joining a {@link JoinRef} brings its <em>target</em> instance in, starting from the
  * source instance the ref names unless a third argument says otherwise.
  *
- * <p><strong>A join to a to-many side multiplies rows</strong>, and there is no {@code DISTINCT}
- * here to undo it — to restrict rather than expand, filter with an {@code EXISTS} fragment.
+ * <p><strong>A join to a to-many side multiplies rows.</strong> {@link #distinct()} collapses the
+ * result — and its total — back to distinct projected rows; a filter that only asks whether a
+ * counterpart exists is cheaper as an {@code EXISTS} fragment, which multiplies nothing.
  */
 public final class FluentSelect<E> {
 
@@ -28,10 +30,12 @@ public final class FluentSelect<E> {
   private final List<EntityRef<?>> alsoSelected;
   private final Long limit;
   private final Long offset;
+  private final boolean distinct;
 
   private FluentSelect(
       EntityRef<E> entity, Condition whereCondition, List<TableJoin> joins,
-      List<SortOrder> sortOrders, List<EntityRef<?>> alsoSelected, Long limit, Long offset) {
+      List<SortOrder> sortOrders, List<EntityRef<?>> alsoSelected, Long limit, Long offset,
+      boolean distinct) {
 
     this.entity = entity;
     this.whereCondition = whereCondition;
@@ -40,12 +44,50 @@ public final class FluentSelect<E> {
     this.alsoSelected = alsoSelected;
     this.limit = limit;
     this.offset = offset;
+    this.distinct = distinct;
   }
 
   public static <E> FluentSelect<E> from(EntityRef<E> entity) {
     Objects.requireNonNull(entity, "entity");
 
-    return new FluentSelect<>(entity, null, List.of(), List.of(), List.of(), null, null);
+    return new FluentSelect<>(entity, null, List.of(), List.of(), List.of(), null, null, false);
+  }
+
+  // One field per copier, so no step method restates the constructor's argument list — it carries
+  // an adjacent Long pair, and a transposed limit/offset compiles silently.
+  private FluentSelect<E> withWhereCondition(Condition whereCondition) {
+    return new FluentSelect<>(
+        entity, whereCondition, joins, sortOrders, alsoSelected, limit, offset, distinct);
+  }
+
+  private FluentSelect<E> withJoins(List<TableJoin> joins) {
+    return new FluentSelect<>(
+        entity, whereCondition, joins, sortOrders, alsoSelected, limit, offset, distinct);
+  }
+
+  private FluentSelect<E> withSortOrders(List<SortOrder> sortOrders) {
+    return new FluentSelect<>(
+        entity, whereCondition, joins, sortOrders, alsoSelected, limit, offset, distinct);
+  }
+
+  private FluentSelect<E> withAlsoSelected(List<EntityRef<?>> alsoSelected) {
+    return new FluentSelect<>(
+        entity, whereCondition, joins, sortOrders, alsoSelected, limit, offset, distinct);
+  }
+
+  private FluentSelect<E> withLimit(Long limit) {
+    return new FluentSelect<>(
+        entity, whereCondition, joins, sortOrders, alsoSelected, limit, offset, distinct);
+  }
+
+  private FluentSelect<E> withOffset(Long offset) {
+    return new FluentSelect<>(
+        entity, whereCondition, joins, sortOrders, alsoSelected, limit, offset, distinct);
+  }
+
+  private FluentSelect<E> withDistinctRows() {
+    return new FluentSelect<>(
+        entity, whereCondition, joins, sortOrders, alsoSelected, limit, offset, true);
   }
 
   /**
@@ -62,8 +104,7 @@ public final class FluentSelect<E> {
     List<EntityRef<?>> extended = new ArrayList<>(alsoSelected);
     extended.add(instance);
 
-    return new FluentSelect<>(
-        entity, whereCondition, joins, sortOrders, List.copyOf(extended), limit, offset);
+    return withAlsoSelected(List.copyOf(extended));
   }
 
   /**
@@ -77,7 +118,7 @@ public final class FluentSelect<E> {
       narrowed = whereCondition.and(condition);
     }
 
-    return new FluentSelect<>(entity, narrowed, joins, sortOrders, alsoSelected, limit, offset);
+    return withWhereCondition(narrowed);
   }
 
   /**
@@ -91,8 +132,7 @@ public final class FluentSelect<E> {
       extended.add(Objects.requireNonNull(order, "order"));
     }
 
-    return new FluentSelect<>(
-        entity, whereCondition, joins, List.copyOf(extended), alsoSelected, limit, offset);
+    return withSortOrders(List.copyOf(extended));
   }
 
   public FluentSelect<E> limit(long rowCount) {
@@ -100,8 +140,7 @@ public final class FluentSelect<E> {
       throw new IllegalArgumentException("A limit cannot be negative, but was " + rowCount);
     }
 
-    return new FluentSelect<>(
-        entity, whereCondition, joins, sortOrders, alsoSelected, rowCount, offset);
+    return withLimit(rowCount);
   }
 
   public FluentSelect<E> offset(long skippedRows) {
@@ -109,8 +148,7 @@ public final class FluentSelect<E> {
       throw new IllegalArgumentException("An offset cannot be negative, but was " + skippedRows);
     }
 
-    return new FluentSelect<>(
-        entity, whereCondition, joins, sortOrders, alsoSelected, limit, skippedRows);
+    return withOffset(skippedRows);
   }
 
   public <T> FluentSelect<E> join(JoinRef<?, T> relationship) {
@@ -181,6 +219,22 @@ public final class FluentSelect<E> {
     return pendingJoin(targetInstance, TableJoin.Kind.LEFT_OUTER);
   }
 
+  /**
+   * Collapses the result to distinct projected rows — the remedy when a join to a to-many side
+   * multiplies the entity a listing is about. The total and the probe follow, the total at the
+   * price of running the selection as a derived table.
+   *
+   * <p>Sorting a distinct description by a column it does not project is a database error, since
+   * {@code DISTINCT} decides which rows survive before the sort runs.
+   */
+  public FluentSelect<E> distinct() {
+    if (distinct) {
+      return this;
+    }
+
+    return withDistinctRows();
+  }
+
   EntityRef<E> entity() {
     return entity;
   }
@@ -201,15 +255,19 @@ public final class FluentSelect<E> {
     return alsoSelected;
   }
 
-  // Paging is kept: it depends on N, not on the order.
-  FluentSelect<E> withoutSort() {
-    return new FluentSelect<>(
-        entity, whereCondition, joins, List.of(), alsoSelected, limit, offset);
+  boolean isDistinct() {
+    return distinct;
   }
 
-  // What a mirror count renders: a total is drawn from the filtered set, not from one page.
+  // Paging is kept: it depends on N, not on the order.
+  FluentSelect<E> withoutSort() {
+    return withSortOrders(List.of());
+  }
+
+  // What a mirror count renders: a total is drawn from the filtered set, not from one page —
+  // distinct is kept, because it decides what the set's rows are.
   FluentSelect<E> withoutSortAndPaging() {
-    return new FluentSelect<>(entity, whereCondition, joins, List.of(), alsoSelected, null, null);
+    return withSortOrders(List.of()).withLimit(null).withOffset(null);
   }
 
   // Narrows the limit and never widens it: limit(0) selects nothing, and LIMIT 1 would report a row
@@ -263,10 +321,9 @@ public final class FluentSelect<E> {
     return joinRelationship(relationship, declaredSource, targetInstance, kind);
   }
 
-  // Presence applies to every relationship; the render would reject an absent source anyway, but
-  // only as an unknown table. Ambiguity applies only where source and target are the same entity,
-  // since that is where traversing twice means a chain — across types the anchor is a convention,
-  // and refusing there would reject statements that render correctly.
+  // Presence applies to every relationship — the render would reject an absent source anyway, but
+  // only as an unknown table. Ambiguity applies only where source and target share an entity type:
+  // across types the declared anchor is the contract, and refusing would reject valid statements.
   private void rejectUndeterminedSource(EntityRef<?> declaredSource, EntityRef<?> targetInstance) {
     List<EntityRef<?>> present = instances();
 
@@ -324,8 +381,7 @@ public final class FluentSelect<E> {
     List<TableJoin> extended = new ArrayList<>(joins);
     extended.add(new TableJoin(targetInstance, onCondition, kind));
 
-    return new FluentSelect<>(
-        entity, whereCondition, List.copyOf(extended), sortOrders, alsoSelected, limit, offset);
+    return withJoins(List.copyOf(extended));
   }
 
   // At the call site rather than at render time: two joins onto one instance both constrain the

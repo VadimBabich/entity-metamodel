@@ -1,0 +1,1 @@
+SELECT "account"."account_id" AS "account__account_id", "account"."owner_email" AS "account__owner_email", "account"."state" AS "account__state" FROM "accounts" "account" ORDER BY length("account"."owner_email") DESC

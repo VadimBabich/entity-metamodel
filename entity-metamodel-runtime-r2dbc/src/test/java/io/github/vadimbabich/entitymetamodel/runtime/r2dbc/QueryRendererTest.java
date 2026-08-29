@@ -1,15 +1,17 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ACCOUNT;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.accountId;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ownerEmail;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.vadimbabich.entitymetamodel.runtime.Condition;
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
-import io.github.vadimbabich.entitymetamodel.runtime.PropertyRef;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
+
 import java.util.List;
+
 import org.junit.jupiter.api.Test;
-import org.springframework.data.r2dbc.dialect.PostgresDialect;
-import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
 /**
  * Rendering is a pure function of the description: no connection, no database, no Spring context.
@@ -21,18 +23,7 @@ import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
  */
 class QueryRendererTest {
 
-  private static final EntityRef<Account> ACCOUNT = EntityRef.of(Account.class);
-
-  private final QueryRenderer renderer =
-      new QueryRenderer(new R2dbcMappingContext(), PostgresDialect.INSTANCE);
-
-  private static PropertyRef<Account, Long> id() {
-    return ACCOUNT.property("id", Long.class);
-  }
-
-  private static PropertyRef<Account, String> ownerEmail() {
-    return ACCOUNT.property("ownerEmail", String.class);
-  }
+  private final QueryRenderer renderer = TestRenderers.postgres();
 
   @Test
   void aSelectWithoutAWhereClauseProjectsEveryColumnAgainstTheInstanceAlias() {
@@ -59,7 +50,7 @@ class QueryRendererTest {
   @Test
   void anInclusionBindsOneMarkerPerValue() {
     RenderedStatement statement =
-        renderer.render(FluentSelect.from(ACCOUNT).where(id().in(List.of(1L, 2L, 3L))));
+        renderer.render(FluentSelect.from(ACCOUNT).where(accountId().in(List.of(1L, 2L, 3L))));
 
     assertThat(statement.sql()).endsWith("WHERE \"account\".\"account_id\" IN ($1, $2, $3)");
     assertThat(statement.values()).containsExactly(1L, 2L, 3L);
@@ -76,7 +67,7 @@ class QueryRendererTest {
 
   @Test
   void markersAreAllocatedInTheOrderTheirValuesAreBound() {
-    Condition emailThenId = ownerEmail().is("owner@example.com").and(id().gt(10L));
+    Condition emailThenId = ownerEmail().is("owner@example.com").and(accountId().gt(10L));
 
     RenderedStatement statement = renderer.render(FluentSelect.from(ACCOUNT).where(emailThenId));
 
@@ -89,7 +80,7 @@ class QueryRendererTest {
   void anOrOperandIsParenthesisedSoItCannotEscapeASurroundingAnd() {
     Condition eitherEmail =
         ownerEmail().is("first@example.com").or(ownerEmail().is("second@example.com"));
-    Condition activeAndEitherEmail = id().gt(0L).and(eitherEmail);
+    Condition activeAndEitherEmail = accountId().gt(0L).and(eitherEmail);
 
     RenderedStatement statement =
         renderer.render(FluentSelect.from(ACCOUNT).where(activeAndEitherEmail));
@@ -118,7 +109,7 @@ class QueryRendererTest {
 
   @Test
   void aNegatedConditionComposedIntoAJunctionKeepsBothGroupings() {
-    Condition activeAndNotExcluded = id().gt(0L).and(id().in(List.of(7L, 8L)).not());
+    Condition activeAndNotExcluded = accountId().gt(0L).and(accountId().in(List.of(7L, 8L)).not());
 
     RenderedStatement statement =
         renderer.render(FluentSelect.from(ACCOUNT).where(activeAndNotExcluded));
@@ -135,7 +126,7 @@ class QueryRendererTest {
     EntityRef<Account> sponsor = ACCOUNT.as("sponsor");
 
     RenderedStatement statement =
-        renderer.render(FluentSelect.from(sponsor).where(id().of(sponsor).is(7L)));
+        renderer.render(FluentSelect.from(sponsor).where(accountId().of(sponsor).is(7L)));
 
     assertThat(statement.sql())
         .isEqualTo(

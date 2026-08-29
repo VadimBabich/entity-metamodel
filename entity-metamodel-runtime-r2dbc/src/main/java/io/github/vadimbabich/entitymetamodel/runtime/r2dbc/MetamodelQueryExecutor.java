@@ -1,10 +1,12 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
+
 import org.springframework.data.core.TypeInformation;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -21,6 +23,9 @@ import reactor.core.publisher.Mono;
  * <p>Takes a {@link DatabaseClient} and {@link QueryRenderer} rather than an
  * {@code R2dbcEntityTemplate}, which exposes neither a bind-marker factory nor a typed mapping
  * context. Every terminal returns a cold publisher: no scheduling, timeout or retry.
+ *
+ * <p>Terminals live here rather than on the builder so that a description stays a pure value with
+ * no executor in reach, which is how one description serves both a page and its count.
  */
 public final class MetamodelQueryExecutor {
 
@@ -115,18 +120,21 @@ public final class MetamodelQueryExecutor {
 
   /**
    * How many rows the description matches, across the whole filtered set rather than one page.
-   * Rows, not entities: a join to a to-many side matches once per counterpart.
+   * Rows, not entities: a join to a to-many side matches once per counterpart — unless the
+   * description is distinct, when the total is its distinct rows.
    */
   public Mono<Long> count(FluentSelect<?> select) {
     Objects.requireNonNull(select, "select");
 
     RenderedStatement statement = renderer.renderCount(select);
 
-    // By position, because the count column's name is the dialect's business. A count is never SQL
-    // NULL, so a null here is a driver fault rather than a zero.
+    // By position, because the count column's name is the dialect's business; a null is a driver
+    // fault rather than a zero, since a count is never SQL NULL. first() rather than one(): a COUNT
+    // without GROUP BY returns one row by construction, while one() would reshape a binding fault
+    // into "returned non unique result" and hide the driver's real error.
     return bind(statement)
         .map(row -> Objects.requireNonNull(row.get(0, Long.class), "count value"))
-        .one();
+        .first();
   }
 
   /**
@@ -144,7 +152,8 @@ public final class MetamodelQueryExecutor {
   /**
    * One page of matching rows, with the total behind it at the cost of a second statement. The
    * request's sort leads any the description carries, and a to-many join makes both the content and
-   * the total count rows rather than entities ({@link FluentSelect}).
+   * the total count rows rather than entities — unless the description is distinct, when both are
+   * its distinct rows ({@link FluentSelect#distinct()}).
    *
    * <p>Only a missing argument throws; everything else — including a sort property the entity does
    * not persist — arrives as an error signal.

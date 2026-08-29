@@ -43,18 +43,31 @@ own conditions; two instances of one table hydrated from a single row, each from
 typed sort, a sort whose property arrives as text from a `Pageable`, and a raw-expression sort;
 `Page`, `list`, `one`, `first`, `count` and `exists` terminals returning cold publishers, with no
 scheduler, timeout, retry or transaction anywhere in the library. A `Criteria` an application already
-builds is accepted unchanged, so a filter layer that works does not have to be rewritten — including
-an empty selection, which matches nothing exactly as it does through the substrate's own template.
+builds is accepted with its meaning intact — every comparator, groups nested to any depth, a chain
+folded under SQL precedence rather than left to right, and an empty selection, which matches nothing
+exactly as it does through the substrate's own template. Its references name properties rather than
+columns: a column name can be another property's name, so resolving one as the other would filter
+the wrong column with nothing to notice. A criteria that names a column is refused, and the refusal
+names the property to use instead.
 
 One thing to know before joining: a join to a to-many side multiplies rows, so the selected entity
 comes back once per matching counterpart — a list carries duplicates and a page's total counts those
-rows rather than entities. That is what the SQL says, and there is no `DISTINCT` to undo it, so a
-join here expands rather than restricts; asking for "parents that have a child" is an `EXISTS`
-fragment through the raw door.
+rows rather than entities. `distinct()` collapses that back to distinct projected rows, and the
+derived statements keep the meaning: the total counts the distinct selection itself as a derived
+table, because no dialect-portable `COUNT` expression says "distinct over these columns" once the
+projection has more than one, and the exists probe keeps the real projection, because `DISTINCT`
+over a literal collapses to one row before an offset applies — a probe asking "is there another
+page" would otherwise say no while distinct rows remain. A join still expands rather than
+restricts: asking for "parents that have a child" is an `EXISTS` fragment through the raw door,
+which joins nothing and multiplies nothing.
 
 Two things it deliberately does not do. It has no aggregate API: a raw-SQL door takes the cases the
-typed vocabulary cannot express, and every `?` in one of those fragments takes either a value to bind
-or a property whose column the library writes itself — so a fragment never spells out a table alias.
+typed vocabulary cannot express, and `{0}` in one of those fragments names either a value to bind or
+a property whose column the library writes itself — so a fragment never spells out a table alias.
+References are numbered rather than positional `?` because a question mark is an operator in the
+dialects this targets: PostgreSQL spells jsonb key existence `?`, `?|` and `?&`, and no parser can
+tell those from a placeholder. Everything that is not `{digits}` is literal text, so those operators
+are now writable; an argument may be named more than once, and one nothing names is refused.
 And it never chooses a thread: no substrate SQL type appears in a public signature, and nothing about
 latency, retries or caching is decided for the consumer.
 

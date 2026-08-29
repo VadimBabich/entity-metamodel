@@ -5,25 +5,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import io.github.vadimbabich.entitymetamodel.runtime.PropertyRef;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
+
 import java.util.List;
+
 import org.junit.jupiter.api.Test;
-import org.springframework.data.r2dbc.dialect.PostgresDialect;
-import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
 /**
  * The inspection door: a consumer can see what a statement will send before it sends it, and log it
  * wherever they choose — the library logs nothing itself.
  *
- * <p>Values are redacted unless asked for. A preview is written to a log far more often than it is
- * read once, so a default that printed bind values would turn every filtered query into a record of
- * whatever it filtered on.
+ * <p>Values are redacted unless asked for. A preview reaches a log far more often than it is read
+ * once, so printing bind values by default would record whatever every filtered query filtered on.
  */
 class StatementPreviewTest {
 
   private static final EntityRef<Account> ACCOUNT = EntityRef.of(Account.class);
 
-  private final QueryRenderer renderer =
-      new QueryRenderer(new R2dbcMappingContext(), PostgresDialect.INSTANCE);
+  private final QueryRenderer renderer = TestRenderers.postgres();
 
   private RenderedStatement filteredByEmail() {
     PropertyRef<Account, String> ownerEmail = ACCOUNT.property("ownerEmail", String.class);

@@ -1,18 +1,16 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ACCOUNT;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.MEMBERSHIP;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.accountId;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ownerEmail;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.owningAccount;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
-import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import io.github.vadimbabich.entitymetamodel.runtime.ExpressionSort;
-import io.github.vadimbabich.entitymetamodel.runtime.JoinRef;
-import io.github.vadimbabich.entitymetamodel.runtime.PropertyRef;
 import io.github.vadimbabich.entitymetamodel.runtime.SqlExpr;
-import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
-import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Membership;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.r2dbc.dialect.PostgresDialect;
-import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
 /**
  * Sort and pagination, rendered through the dialect's own render context: the bare renderer emits
@@ -20,19 +18,7 @@ import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
  */
 class SortAndPaginationRenderingTest {
 
-  private static final EntityRef<Account> ACCOUNT = EntityRef.of(Account.class);
-  private static final EntityRef<Membership> MEMBERSHIP = EntityRef.of(Membership.class);
-
-  private final QueryRenderer renderer =
-      new QueryRenderer(new R2dbcMappingContext(), PostgresDialect.INSTANCE);
-
-  private static PropertyRef<Account, String> ownerEmail() {
-    return ACCOUNT.property("ownerEmail", String.class);
-  }
-
-  private static PropertyRef<Account, Long> accountId() {
-    return ACCOUNT.property("id", Long.class);
-  }
+  private final QueryRenderer renderer = TestRenderers.postgres();
 
   @Test
   void ascendingAndDescendingBothStateTheirDirection() {
@@ -60,7 +46,7 @@ class SortAndPaginationRenderingTest {
     RenderedStatement statement =
         renderer.render(
             FluentSelect.from(ACCOUNT)
-                .orderBy(ExpressionSort.desc(SqlExpr.raw("length(?)", ownerEmail()))));
+                .orderBy(ExpressionSort.desc(SqlExpr.raw("length({0})", ownerEmail()))));
 
     assertThat(statement.sql()).endsWith("ORDER BY length(\"account\".\"owner_email\") DESC");
   }
@@ -71,7 +57,7 @@ class SortAndPaginationRenderingTest {
         renderer.render(
             FluentSelect.from(ACCOUNT)
                 .orderBy(
-                    ExpressionSort.asc(SqlExpr.raw("length(?)", ownerEmail())),
+                    ExpressionSort.asc(SqlExpr.raw("length({0})", ownerEmail())),
                     accountId().desc()));
 
     assertThat(statement.sql())
@@ -115,12 +101,9 @@ class SortAndPaginationRenderingTest {
 
   @Test
   void sortingOnAJoinedInstanceUsesThatInstancesTable() {
-    JoinRef<Membership, Account> account =
-        JoinRef.of(
-            MEMBERSHIP.property("accountId", Long.class), ACCOUNT.property("id", Long.class));
-
     RenderedStatement statement =
-        renderer.render(FluentSelect.from(MEMBERSHIP).join(account).orderBy(ownerEmail().asc()));
+        renderer.render(
+            FluentSelect.from(MEMBERSHIP).join(owningAccount()).orderBy(ownerEmail().asc()));
 
     assertThat(statement.sql()).endsWith("ORDER BY \"account\".\"owner_email\" ASC");
   }
@@ -135,8 +118,8 @@ class SortAndPaginationRenderingTest {
 
   @Test
   void anExistenceProbeKeepsTheOffsetButDropsTheSort() {
-    // "Is there another page" is exists(base.offset(pageEnd)); dropping the offset turns it into
-    // "does anything match", and a paging control reports a next page forever.
+    // "Is there another page" is exists(base.offset(pageEnd)). Dropping the offset turns it into
+    // "does anything match", and a paging control then reports a next page forever.
     RenderedStatement statement =
         renderer.renderExistsProbe(
             FluentSelect.from(ACCOUNT).orderBy(ownerEmail().asc()).limit(10).offset(20));

@@ -224,25 +224,83 @@ What that covers today, each part exercised against a real PostgreSQL 16 in the 
 
 - Inner and left-outer joins from declared relationships or from a condition you state, including
   the same table joined several times under distinct aliases — and both instances hydrated from a
-  single row.
+  single row. A join to a to-many side multiplies rows; `distinct()` collapses a listing — and its
+  total, and its paging probes — back to distinct entities.
 - A typed filter vocabulary — equality, ranges, `IN`, `LIKE`, null tests, column-to-column
   comparison, negation — composed with `and`/`or` and parenthesised by construction, so an `OR`
   cannot silently widen a match.
-- A `Criteria` your application already builds is accepted unchanged; an integration test holds the
-  returned rows equal to Spring's own template across a matrix of filter shapes.
+- A `Criteria` your application already builds is accepted with its meaning intact — nested groups,
+  and a chain folded under SQL precedence rather than left to right; an integration test holds the
+  returned rows equal to Spring's own template across a matrix of filter shapes. Its references name
+  properties, not columns; a column name is refused, naming the property to use instead.
 - `Pageable` translation: the request's sort arrives as text, resolves against the entity, and an
   unknown property becomes an error signal on the publisher — request data, not a thrown exception.
 - `page`, `list`, `one`, `first`, `count` and `exists` terminals returning cold publishers. The
   library never schedules, times out, retries or opens a transaction; that stays yours.
-- A raw-SQL door for what the vocabulary cannot say, where every `?` takes either a bind value or a
-  property whose column the library writes itself.
+- A raw-SQL door for what the vocabulary cannot say, where `{0}` names either a bind value or a
+  property whose column the library writes itself. Numbered rather than `?`, so a fragment can use
+  the dialect's own question-mark operators — PostgreSQL's jsonb `?`, `?|`, `?&` — which an
+  execution test exercises against a real database.
 - Where a projected label would pass the 63 bytes PostgreSQL silently truncates identifiers to, the
   statement switches to positional table aliases instead of returning silently wrong rows.
 
-Deliberate boundaries, stated up front: there is no aggregate API and no `DISTINCT` — a join to a
-to-many side multiplies rows, and "parents that have a child" is an `EXISTS` fragment through the
-raw door, not a join. Signatures can still change; there is no compatibility promise until the
-first release.
+Deliberate boundaries, stated up front: there is no aggregate API — no `GROUP BY`, no `HAVING`,
+no `UNION`, no subquery vocabulary. "Parents that have a child" is an `EXISTS` fragment through the
+raw door, not a join, because a join expands where a restriction should not. Signatures can still
+change; there is no compatibility promise until the first release.
+
+## Compared with the alternatives
+
+Every option below solves a real problem. The honest comparison is about whose problem — and what
+each choice couples your code to.
+
+**Hand-written constant classes.** The zero-dependency answer, and the one most codebases start
+with: a helper that returns column names, or a class of string constants next to each entity.
+It works until it rots — nothing keeps it in step with the entity, a rename leaves the constant
+compiling and the query broken, and every join you write by hand re-derives the same aliases.
+This project is that idea with the rot removed: the build derives the references, so drift is a
+compile error.
+
+**Spring Data R2DBC alone.** Already on your classpath, and its `Criteria`/template API is good at
+what it covers. Two structural limits: every property is a string the compiler cannot see, and the
+fluent `Query`/`Criteria` API has no join vocabulary — the moment two tables are involved you drop
+to hand-assembled SQL AST or a `@Query` string. This library keeps the stack (same mapping context,
+same converters, same `DatabaseClient`) and adds the two missing pieces: compile-checked references
+and typed joins. A `Criteria` you already build is accepted as-is, so adopting this is not a
+rewrite of the filter code you have.
+
+**QueryDSL.** The classic typed-query answer for JPA. For this stack it is a poor fit on two hard
+facts: its SQL module executes over JDBC — there is no first-party reactive/R2DBC execution — and
+the original project has been quiet since 5.1.0 (January 2024), with active maintenance continuing
+in a community fork. Betting a reactive codebase on a blocking executor with an uncertain upstream
+is the kind of decision this comparison exists to prevent.
+
+**jOOQ.** The strongest alternative, and for some teams the right one: full SQL coverage —
+subqueries, unions, window functions, DML — per-dialect rendering, and first-class R2DBC support.
+The costs are structural rather than qualitative. jOOQ is schema-first: its metamodel is generated
+from the database, so when you also run Spring Data your column names, converters and entity
+mapping live in two systems that nothing keeps consistent — this library is entity-first and shares
+Spring Data's one mapping context, so `@Column` and your registered converters stay the single
+source of truth for generation, rendering and row reading alike. jOOQ brings its own execution and
+row-mapping model rather than plugging into Spring Data's; it is dual-licensed, free for
+open-source databases with commercial editions for commercial ones; and its code generation wants a
+database (or DDL) at build time, where an annotation processor needs only your sources.
+
+| | Hand-written | Spring Data alone | QueryDSL | jOOQ | entity-metamodel |
+|---|---|---|---|---|---|
+| Rename-safe references | no | no | yes | yes | **yes** |
+| Typed joins | n/a | no | yes (JDBC) | yes | **yes** |
+| Reactive (R2DBC) execution | n/a | yes | no first-party | yes | **yes** |
+| Metamodel source | you | — | entities/schema | database schema | **your entities** |
+| Shares Spring Data's mapping context | yes | yes | no | no | **yes** |
+| Existing `Criteria` accepted unchanged | — | yes | no | no | **yes** |
+| Full SQL (aggregates, unions, windows, DML) | — | no | yes | **yes** | no — deliberate |
+| Build-time needs | — | — | codegen | database/DDL + codegen | annotation processor |
+| Licence | — | Apache-2.0 | Apache-2.0 | dual (OSS/commercial) | Apache-2.0 |
+
+And the case for choosing them: if your queries genuinely need aggregation, set operations or
+window functions as a matter of course, jOOQ is the right tool — use it for those queries. The two
+coexist without conflict, precisely because this library deliberately stops where full SQL begins.
 
 ## Where it's going
 
