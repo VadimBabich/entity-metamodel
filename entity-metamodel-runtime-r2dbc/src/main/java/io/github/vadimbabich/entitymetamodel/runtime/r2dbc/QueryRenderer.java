@@ -13,6 +13,7 @@ import io.github.vadimbabich.entitymetamodel.runtime.PropertyRef;
 import io.github.vadimbabich.entitymetamodel.runtime.PropertySort;
 import io.github.vadimbabich.entitymetamodel.runtime.SortOrder;
 import io.github.vadimbabich.entitymetamodel.runtime.SqlExpr;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -20,6 +21,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import org.springframework.data.r2dbc.dialect.R2dbcDialect;
 import org.springframework.data.relational.core.dialect.RenderContextFactory;
 import org.springframework.data.relational.core.mapping.RelationalMappingContext;
@@ -59,6 +63,11 @@ public final class QueryRenderer {
   private final IdentifierProcessing identifierProcessing;
   private final SqlRenderer sqlRenderer;
 
+  // Mirrors the validating half in SqlExpr. Duplicated rather than shared: sharing would promote a
+  // template grammar into public API, and would guard the pattern's text without guarding how each
+  // side reads a match. The in-step matrix test guards that.
+  private static final Pattern ARGUMENT_REFERENCE = Pattern.compile("\\{([0-9]+)}");
+
   public QueryRenderer(RelationalMappingContext mappingContext, R2dbcDialect dialect) {
     Objects.requireNonNull(dialect, "dialect");
 
@@ -89,13 +98,20 @@ public final class QueryRenderer {
 
   /**
    * The total behind a page: the same FROM, joins and filter, projected as a count. Sort and paging
-   * come off the description, so the count cannot drift from its page.
+   * come off the description, so the count cannot drift from its page. A distinct description's
+   * total counts its distinct rows, and is therefore defined over its projection — including the
+   * projection's own refusals, which its page shares anyway.
    */
   public RenderedStatement renderCount(FluentSelect<?> select) {
     Objects.requireNonNull(select, "select");
 
     FluentSelect<?> wholeFilteredSet = select.withoutSortAndPaging();
     RenderPass pass = passOver(wholeFilteredSet);
+
+    if (select.isDistinct()) {
+      return distinctTotalOf(wholeFilteredSet, pass);
+    }
+
     List<Expression> countProjection = List.of(Functions.count(SQL.literalOf(1)));
 
     Select statement = buildStatement(wholeFilteredSet, countProjection, pass);
@@ -103,9 +119,25 @@ public final class QueryRenderer {
     return statementOf(statement, pass);
   }
 
+  // The distinct selection is counted as a derived table: DISTINCT applies to the whole projected
+  // row, and no dialect-portable COUNT expression says that once the projection has more than one
+  // column. The inner statement stays the substrate's own rendering, bindings unchanged.
+  private RenderedStatement distinctTotalOf(FluentSelect<?> wholeFilteredSet, RenderPass pass) {
+    Select distinctRows =
+        buildStatement(wholeFilteredSet, projectionOf(wholeFilteredSet, pass), pass);
+
+    String derivedTable = SqlIdentifier.quoted("distinct_rows").toSql(identifierProcessing);
+    String totalSql =
+        "SELECT COUNT(1) FROM (" + sqlRenderer.render(distinctRows) + ") " + derivedTable;
+
+    return new RenderedStatement(totalSql, pass.bindings(), pass.aliases());
+  }
+
   /**
-   * Whether anything matches, as a single row of a literal — no entity column projected. The offset
-   * is kept: {@code exists(page.offset(end))} is how "is there another page" is asked.
+   * Whether anything matches, as a one-row probe. The offset is kept:
+   * {@code exists(page.offset(end))} is how "is there another page" is asked. Non-distinct probes
+   * project a literal; a distinct probe keeps the description's projection, since the distinct rows
+   * are what its offset must skip.
    */
   public RenderedStatement renderExistsProbe(FluentSelect<?> select) {
     Objects.requireNonNull(select, "select");
@@ -113,7 +145,17 @@ public final class QueryRenderer {
     FluentSelect<?> onePage = select.withoutSort().withAtMostOneRow();
     RenderPass pass = passOver(onePage);
 
-    Select statement = buildStatement(onePage, List.of(SQL.literalOf(1)), pass);
+    // DISTINCT over a literal is one row before the offset even applies, so a distinct probe would
+    // answer "nothing further" while distinct rows remain; it keeps the real projection instead,
+    // and SQL applies DISTINCT before the window.
+    List<Expression> probeProjection;
+    if (select.isDistinct()) {
+      probeProjection = projectionOf(onePage, pass);
+    } else {
+      probeProjection = List.of(SQL.literalOf(1));
+    }
+
+    Select statement = buildStatement(onePage, probeProjection, pass);
 
     return statementOf(statement, pass);
   }
@@ -182,8 +224,13 @@ public final class QueryRenderer {
       pass.tableOf(alsoSelected);
     }
 
+    SelectBuilder.SelectAndFrom selectClause = StatementBuilder.select(projection);
+    if (select.isDistinct()) {
+      selectClause = selectClause.distinct();
+    }
+
     SelectBuilder.SelectFromAndJoin fromClause =
-        StatementBuilder.select(projection).from(pass.tableOf(select.entity()));
+        selectClause.from(pass.tableOf(select.entity()));
 
     // Before the joins and the filter because the staged builder offers limit and offset only on
     // the from/join stages. The SQL still places them last, so do not "correct" this into SQL
@@ -422,27 +469,39 @@ public final class QueryRenderer {
     return Conditions.just(assembleFragment(rawFragment, pass));
   }
 
+  // Assembled by hand rather than with Matcher#appendReplacement: a replacement string treats '$'
+  // as a group reference, and the text being substituted here is frequently '$1' — PostgreSQL's
+  // own bind marker. The tidier-looking call would corrupt exactly the dialect this door targets.
   private String assembleFragment(SqlExpr rawFragment, RenderPass pass) {
-    String[] literalParts = rawFragment.sql().split("\\?", -1);
-    StringBuilder assembled = new StringBuilder(literalParts[0]);
-
+    String template = rawFragment.sql();
     List<Object> arguments = rawFragment.arguments();
-    for (int placeholder = 0; placeholder < arguments.size(); placeholder++) {
-      assembled
-          .append(placeholderTextFor(arguments.get(placeholder), pass))
-          .append(literalParts[placeholder + 1]);
+
+    Matcher references = ARGUMENT_REFERENCE.matcher(template);
+    StringBuilder assembled = new StringBuilder();
+    int literalFrom = 0;
+
+    while (references.find()) {
+      assembled.append(template, literalFrom, references.start());
+
+      // In range because SqlExpr refused the fragment otherwise — the mirrored half of the
+      // grammar, held in step by the in-step matrix test rather than by a shared constant.
+      int argumentIndex = Integer.parseInt(references.group(1));
+      assembled.append(referenceTextFor(arguments.get(argumentIndex), pass));
+
+      literalFrom = references.end();
     }
+
+    assembled.append(template, literalFrom, template.length());
 
     return assembled.toString();
   }
 
-  // A property becomes the instance's qualified column, anything else a marker. Rendering the
-  // column here rather than letting the caller write the alias is what keeps a fragment working
-  // when the statement's aliases change, and it quotes the way the projection does.
-  private String placeholderTextFor(Object argument, RenderPass pass) {
+  // Rendering the column here rather than letting the caller write the alias is what keeps a
+  // fragment working when the statement's aliases change, and quotes it as the projection does.
+  private String referenceTextFor(Object argument, RenderPass pass) {
     if (argument instanceof PropertyRef<?, ?> property) {
-      // For its rejection of an instance the statement never named, which would otherwise reach the
-      // database as valid-looking SQL.
+      // For its rejection of an instance the statement never named, which would otherwise reach
+      // the database as valid-looking SQL.
       pass.tableOf(property.entity());
 
       String tableAlias =

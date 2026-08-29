@@ -7,21 +7,18 @@ import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import io.github.vadimbabich.entitymetamodel.runtime.PropertyRef;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.r2dbc.dialect.PostgresDialect;
-import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
 /**
  * A builder step returns a new description and leaves the receiver alone, so one half-built query
- * can be finished two different ways concurrently. Immutability is asserted through what the
- * descriptions render, not through reference identity — a copy that shared mutable state would
- * satisfy {@code isNotSameAs} and still corrupt its sibling.
+ * can be finished two ways. Immutability is asserted through what the descriptions render rather
+ * than through reference identity: a copy sharing mutable state would satisfy {@code isNotSameAs}
+ * and still corrupt its sibling.
  */
 class FluentSelectContractTest {
 
   private static final EntityRef<Account> ACCOUNT = EntityRef.of(Account.class);
 
-  private final QueryRenderer renderer =
-      new QueryRenderer(new R2dbcMappingContext(), PostgresDialect.INSTANCE);
+  private final QueryRenderer renderer = TestRenderers.postgres();
 
   @Test
   void addingAWhereClauseLeavesTheOriginalDescriptionUnfiltered() {
@@ -47,11 +44,21 @@ class FluentSelectContractTest {
   }
 
   @Test
+  void markingADescriptionDistinctLeavesTheOriginalCountingEveryRow() {
+    FluentSelect<Account> everyRow = FluentSelect.from(ACCOUNT);
+
+    FluentSelect<Account> distinctRows = everyRow.distinct();
+
+    assertThat(renderer.render(everyRow).sql()).startsWith("SELECT \"");
+    assertThat(renderer.render(distinctRows).sql()).startsWith("SELECT DISTINCT ");
+  }
+
+  @Test
   void aSecondFilterNarrowsInsteadOfReplacingTheFirst() {
     PropertyRef<Account, Long> id = ACCOUNT.property("id", Long.class);
     PropertyRef<Account, String> ownerEmail = ACCOUNT.property("ownerEmail", String.class);
 
-    // Conditional accumulation is how these queries get built. Replacing would silently drop an
+    // Conditional accumulation is how these queries get built, so replacing would silently drop an
     // earlier scope — a tenant or owner predicate — and widen the result with no error.
     RenderedStatement statement =
         renderer.render(

@@ -1,5 +1,11 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ACCOUNT;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.MEMBERSHIP;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.memberships;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ownerEmail;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.owningAccount;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.sponsoringAccount;
 import static org.assertj.core.api.Assertions.assertThat;
 import static io.r2dbc.spi.ConnectionFactoryOptions.DATABASE;
 import static io.r2dbc.spi.ConnectionFactoryOptions.DRIVER;
@@ -12,10 +18,10 @@ import io.github.vadimbabich.entitymetamodel.runtime.Condition;
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import io.github.vadimbabich.entitymetamodel.runtime.ExpressionSort;
 import io.github.vadimbabich.entitymetamodel.runtime.JoinRef;
-import io.github.vadimbabich.entitymetamodel.runtime.PropertyRef;
 import io.github.vadimbabich.entitymetamodel.runtime.SqlExpr;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.AccountState;
+import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.DocumentRecord;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Ghost;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Membership;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.NotificationPreferenceSnapshot;
@@ -23,7 +29,9 @@ import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Order;
 import io.r2dbc.spi.ConnectionFactories;
 import io.r2dbc.spi.ConnectionFactory;
 import io.r2dbc.spi.ConnectionFactoryOptions;
+
 import java.util.List;
+
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -57,9 +65,8 @@ class MetamodelQueryExecutorIT {
     return DockerClientFactory.instance().isDockerAvailable() || System.getenv("CI") != null;
   }
 
-  private static final EntityRef<Account> ACCOUNT = EntityRef.of(Account.class);
-  private static final EntityRef<Membership> MEMBERSHIP = EntityRef.of(Membership.class);
   private static final EntityRef<Ghost> GHOST = EntityRef.of(Ghost.class);
+  private static final EntityRef<DocumentRecord> DOCUMENT = EntityRef.of(DocumentRecord.class);
 
   private static final String INJECTION_ATTEMPT = "x' OR '1'='1";
 
@@ -114,6 +121,12 @@ class MetamodelQueryExecutorIT {
             + " last_updated_by_administrator_account_identifier varchar(255))");
     execute("insert into notification_preference_snapshots values (1, 'an-administrator')");
 
+    // A jsonb column the entity deliberately does not map, so a raw fragment can name it while the
+    // projection stays one column wide.
+    execute("create table document_records (id bigint primary key, attributes jsonb)");
+    execute("insert into document_records values (1, '{\"archived\": true, \"kind\": \"note\"}')");
+    execute("insert into document_records values (2, '{\"kind\": \"invoice\"}')");
+
     // A reserved-word entity name and a mixed-case column: the two identifier hazards no other
     // fixture has, because every other fixture name happens to be safe.
     execute("create table orders (id bigint primary key, \"placedBy\" varchar(255))");
@@ -150,27 +163,6 @@ class MetamodelQueryExecutorIT {
         .fetch()
         .rowsUpdated()
         .block();
-  }
-
-  // The three relationships this suite traverses, named once.
-  private static JoinRef<Membership, Account> owningAccount() {
-    return JoinRef.of(
-        MEMBERSHIP.property("accountId", Long.class), ACCOUNT.property("id", Long.class));
-  }
-
-  private static JoinRef<Membership, Account> sponsoringAccount() {
-    return JoinRef.of(
-        MEMBERSHIP.property("sponsorAccountId", Long.class), ACCOUNT.property("id", Long.class));
-  }
-
-  // The reverse direction: one account's memberships, the shape that multiplies rows.
-  private static JoinRef<Account, Membership> memberships() {
-    return JoinRef.of(
-        ACCOUNT.property("id", Long.class), MEMBERSHIP.property("accountId", Long.class));
-  }
-
-  private static PropertyRef<Account, String> ownerEmail() {
-    return ACCOUNT.property("ownerEmail", String.class);
   }
 
   @Test
@@ -242,7 +234,7 @@ class MetamodelQueryExecutorIT {
     StepVerifier.create(
             executor.count(
                 FluentSelect.from(ACCOUNT)
-                    .where(SqlExpr.raw("lower(owner_email) = ?", "first@example.com"))))
+                    .where(SqlExpr.raw("lower(owner_email) = {0}", "first@example.com"))))
         .expectNext(1L)
         .verifyComplete();
   }
@@ -426,7 +418,7 @@ class MetamodelQueryExecutorIT {
   void anExpressionSortOrdersBySomethingNoPropertyNameCouldSay() {
     FluentSelect<Account> byAddressLength =
         FluentSelect.from(ACCOUNT)
-            .orderBy(ExpressionSort.asc(SqlExpr.raw("length(?)", ownerEmail())));
+            .orderBy(ExpressionSort.asc(SqlExpr.raw("length({0})", ownerEmail())));
 
     StepVerifier.create(executor.list(byAddressLength))
         .assertNext(
@@ -602,6 +594,140 @@ class MetamodelQueryExecutorIT {
   }
 
   @Test
+  void distinctCollapsesAMultipliedDescriptionToItsDistinctRows() {
+    // The remedy for the multiplication the two tests above pin: accounts 1 and 2 have
+    // memberships, account 1 has two of them.
+    FluentSelect<Account> distinctAccounts =
+        FluentSelect.from(ACCOUNT)
+            .join(memberships())
+            .distinct()
+            .orderBy(ACCOUNT.property("id", Long.class).asc());
+
+    StepVerifier.create(executor.list(distinctAccounts))
+        .assertNext(
+            accounts ->
+                assertThat(accounts).extracting(account -> account.id).containsExactly(1L, 2L))
+        .verifyComplete();
+
+    StepVerifier.create(executor.count(distinctAccounts)).expectNext(2L).verifyComplete();
+  }
+
+  @Test
+  void aDistinctPageHoldsEachEntityOnceAndItsTotalAgrees() {
+    FluentSelect<Account> distinctAccounts =
+        FluentSelect.from(ACCOUNT).join(memberships()).distinct();
+
+    StepVerifier.create(executor.page(distinctAccounts, PageRequest.of(0, 2, Sort.by("id"))))
+        .assertNext(
+            page -> {
+              assertThat(page.getContent())
+                  .extracting(account -> account.id)
+                  .containsExactly(1L, 2L);
+              assertThat(page.getTotalElements()).isEqualTo(2L);
+              assertThat(page.hasNext()).isFalse();
+            })
+        .verifyComplete();
+  }
+
+  @Test
+  void aDistinctProbePastAnOffsetSkipsDistinctRowsRatherThanJoinedOnes() {
+    // Three joined rows but two distinct accounts. Both offsets matter: without the first, a probe
+    // whose DISTINCT collapsed a literal to one row still passes; without the second, joined rows
+    // pass as distinct ones.
+    FluentSelect<Account> perMembership = FluentSelect.from(ACCOUNT).join(memberships());
+
+    StepVerifier.create(executor.exists(perMembership.offset(2)))
+        .expectNext(Boolean.TRUE)
+        .verifyComplete();
+
+    StepVerifier.create(executor.exists(perMembership.distinct().offset(1)))
+        .expectNext(Boolean.TRUE)
+        .verifyComplete();
+
+    StepVerifier.create(executor.exists(perMembership.distinct().offset(2)))
+        .expectNext(Boolean.FALSE)
+        .verifyComplete();
+  }
+
+  @Test
+  void aCorrelatedExistsFragmentRestrictsWithoutMultiplyingOrDeduplicating() {
+    // The third remedy beside the two above: nothing joins, so nothing multiplies and nothing
+    // needs collapsing — the count is entity-shaped without a derived table.
+    FluentSelect<Account> withMemberships =
+        FluentSelect.from(ACCOUNT)
+            .where(
+                SqlExpr.raw(
+                    "EXISTS (SELECT 1 FROM memberships m WHERE m.account_id = {0})",
+                    ACCOUNT.property("id", Long.class)))
+            .orderBy(ACCOUNT.property("id", Long.class).asc());
+
+    StepVerifier.create(executor.list(withMemberships))
+        .assertNext(
+            accounts ->
+                assertThat(accounts).extracting(account -> account.id).containsExactly(1L, 2L))
+        .verifyComplete();
+
+    StepVerifier.create(executor.count(withMemberships)).expectNext(2L).verifyComplete();
+  }
+
+  /**
+   * PostgreSQL spells jsonb key existence with question marks, which the template grammar leaves as
+   * literal text. {@code ?|} takes {@code text[]} on its right, so the argument is an array and
+   * needs the {@code (Object)} cast that keeps varargs from spreading it.
+   */
+  @Test
+  void aJsonbKeyExistenceOperatorExecutesWithItsArrayBound() {
+    String[] eitherKey = {"archived", "missing"};
+
+    FluentSelect<DocumentRecord> carryingEitherKey =
+        FluentSelect.from(DOCUMENT)
+            .where(SqlExpr.raw("attributes ?| {0}", (Object) eitherKey))
+            .orderBy(DOCUMENT.property("id", Long.class).asc());
+
+    StepVerifier.create(executor.list(carryingEitherKey))
+        .assertNext(records -> assertThat(records).extracting(record -> record.id).containsExactly(1L))
+        .verifyComplete();
+  }
+
+  /**
+   * The containment half, and why its cast is load-bearing: a bound parameter arrives typed as
+   * text, where a literal in hand-written SQL would be resolved to jsonb by context. Without
+   * {@code ::jsonb} the operator has no candidate.
+   */
+  @Test
+  void aJsonbContainmentOperatorExecutesWhenTheBoundParameterIsCast() {
+    FluentSelect<DocumentRecord> invoices =
+        FluentSelect.from(DOCUMENT)
+            .where(SqlExpr.raw("attributes @> {0}::jsonb", "{\"kind\": \"invoice\"}"));
+
+    StepVerifier.create(executor.list(invoices))
+        .assertNext(records -> assertThat(records).extracting(record -> record.id).containsExactly(2L))
+        .verifyComplete();
+  }
+
+  @Test
+  void aBareQuestionMarkOperatorNeedsNoArgumentAtAll() {
+    FluentSelect<DocumentRecord> archived =
+        FluentSelect.from(DOCUMENT).where(SqlExpr.raw("attributes ? 'archived'"));
+
+    StepVerifier.create(executor.count(archived)).expectNext(1L).verifyComplete();
+  }
+
+  @Test
+  void aBindingFaultIsReportedAsOneWhateverTerminalMeetsIt() {
+    FluentSelect<Account> markerInsideALiteral =
+        FluentSelect.from(ACCOUNT).where(SqlExpr.raw("owner_email = '{0}'", "first@example.com"));
+
+    StepVerifier.create(executor.list(markerInsideALiteral))
+        .verifyErrorSatisfies(
+            fault -> assertThat(fault).hasMessageContaining("Binding index 0"));
+
+    StepVerifier.create(executor.count(markerInsideALiteral))
+        .verifyErrorSatisfies(
+            fault -> assertThat(fault).hasMessageContaining("Binding index 0"));
+  }
+
+  @Test
   void moreThanOneMatchIsReportedAsSuchRatherThanAsAnIndexFault() {
     JoinRef<Account, Membership> memberships = memberships();
 
@@ -659,7 +785,25 @@ class MetamodelQueryExecutorIT {
             CriteriaDefinition.from(
                 List.of(
                     Criteria.where("ownerEmail").like("%example.com"),
-                    Criteria.where("id").is(1L).or("id").is(2L))));
+                    Criteria.where("id").is(1L).or("id").is(2L))),
+
+            // Shapes the rest of the matrix does not reach: a range test, the same test narrowed
+            // by a chained AND, and again wrapped as a group. Each separates the two foldings.
+            Criteria.where("id").between(1L, 2L).or("id").is(3L),
+            Criteria.where("id")
+                .between(1L, 2L)
+                .or("id")
+                .is(3L)
+                .and("ownerEmail")
+                .is("first@example.com"),
+            Criteria.empty()
+                .and(Criteria.where("id").between(1L, 2L).or("id").is(3L))
+                .and("ownerEmail")
+                .is("first@example.com"),
+            Criteria.where("ownerEmail")
+                .notIn(List.of("first@example.com"))
+                .and("id")
+                .lessThanOrEquals(2L));
 
     for (CriteriaDefinition shape : shapes) {
       Mono<List<Long>> throughSubstrate =
@@ -686,6 +830,35 @@ class MetamodelQueryExecutorIT {
                       .isEqualTo(rows.getT1()))
           .verifyComplete();
     }
+  }
+
+  /**
+   * The same three members, chained and grouped, do not mean the same thing, and both readings
+   * arrive from the filter layer. Parity against the template would be satisfied by two sides
+   * folding a chain the same wrong way; these row sets separate the readings absolutely.
+   */
+  @Test
+  void aNarrowingAndAppliesToAGroupedRangeButNotToAChainedOne() {
+    CriteriaDefinition asChain =
+        Criteria.where("id").between(1L, 2L).or("id").is(3L).and("ownerEmail").is("first@example.com");
+
+    CriteriaDefinition asGroup =
+        Criteria.empty()
+            .and(Criteria.where("id").between(1L, 2L).or("id").is(3L))
+            .and("ownerEmail")
+            .is("first@example.com");
+
+    StepVerifier.create(accountIdsMatching(asChain)).expectNext(List.of(1L, 2L)).verifyComplete();
+    StepVerifier.create(accountIdsMatching(asGroup)).expectNext(List.of(1L)).verifyComplete();
+  }
+
+  private Mono<List<Long>> accountIdsMatching(CriteriaDefinition filter) {
+    return executor
+        .all(
+            FluentSelect.from(ACCOUNT)
+                .where(criteriaAdapter.toCondition(filter, ACCOUNT).orElseThrow()))
+        .map(account -> account.id)
+        .collectSortedList();
   }
 
   private record MembershipParties(Membership membership, Account owner, Account sponsor) {

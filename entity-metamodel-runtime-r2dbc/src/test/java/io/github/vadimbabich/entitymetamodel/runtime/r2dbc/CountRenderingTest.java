@@ -1,42 +1,28 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ACCOUNT;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.MEMBERSHIP;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ownerEmail;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.owningAccount;
 import static org.assertj.core.api.Assertions.assertThat;
 
-import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
-import io.github.vadimbabich.entitymetamodel.runtime.JoinRef;
-import io.github.vadimbabich.entitymetamodel.runtime.PropertyRef;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Membership;
+
 import java.util.List;
+
 import org.junit.jupiter.api.Test;
-import org.springframework.data.r2dbc.dialect.PostgresDialect;
-import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
 /**
  * A page needs its total, and the total is only trustworthy if it counts exactly the rows the page
  * was drawn from — so the count rebuilds the same FROM/JOIN/WHERE and must bind the same values.
  *
- * <p>The spike found that reusing an already-mapped condition preserves bind identity while
- * re-mapping allocates fresh markers, which made "reuse, never re-map" a rule to remember. Holding
- * conditions as pure data removes the choice: there is nothing mapped to reuse or lose, and
- * {@link #aCountBindsExactlyWhatThePageBinds()} is what proves it rather than assuming it.
+ * <p>Re-mapping an already-mapped condition would allocate fresh markers; holding conditions as
+ * pure data removes the choice, and {@link #aCountBindsExactlyWhatThePageBinds()} proves it.
  */
 class CountRenderingTest {
 
-  private static final EntityRef<Account> ACCOUNT = EntityRef.of(Account.class);
-  private static final EntityRef<Membership> MEMBERSHIP = EntityRef.of(Membership.class);
-
-  private final QueryRenderer renderer =
-      new QueryRenderer(new R2dbcMappingContext(), PostgresDialect.INSTANCE);
-
-  private static PropertyRef<Account, String> ownerEmail() {
-    return ACCOUNT.property("ownerEmail", String.class);
-  }
-
-  private static JoinRef<Membership, Account> account() {
-    return JoinRef.of(
-        MEMBERSHIP.property("accountId", Long.class), ACCOUNT.property("id", Long.class));
-  }
+  private final QueryRenderer renderer = TestRenderers.postgres();
 
   @Test
   void aCountProjectsATotalInsteadOfColumns() {
@@ -49,7 +35,9 @@ class CountRenderingTest {
   @Test
   void aCountKeepsTheJoinsAndFiltersOfThePageItMirrors() {
     FluentSelect<Membership> page =
-        FluentSelect.from(MEMBERSHIP).join(account()).where(ownerEmail().is("owner@example.com"));
+        FluentSelect.from(MEMBERSHIP)
+            .join(owningAccount())
+            .where(ownerEmail().is("owner@example.com"));
 
     RenderedStatement statement = renderer.renderCount(page);
 

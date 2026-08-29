@@ -7,23 +7,20 @@ import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Order;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Person;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.r2dbc.dialect.PostgresDialect;
-import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
 /**
  * Every identifier the statement mints is quoted, and every identifier the mapping context supplies
  * keeps the quoting the context chose.
  *
  * <p>Unquoted, an alias taken from a class named {@code Order} or {@code User} is a keyword and the
- * statement will not parse; an explicitly mixed-case column folds to lower case and stops existing.
- * Both are invisible to a fixture whose names happen to be safe.
+ * statement will not parse; a mixed-case column folds to lower case and stops existing. Both are
+ * invisible to a fixture whose names happen to be safe.
  */
 class IdentifierQuotingTest {
 
   private static final EntityRef<Order> ORDER = EntityRef.of(Order.class);
 
-  private final QueryRenderer renderer =
-      new QueryRenderer(new R2dbcMappingContext(), PostgresDialect.INSTANCE);
+  private final QueryRenderer renderer = TestRenderers.postgres();
 
   @Test
   void anAliasTakenFromAReservedWordIsQuoted() {
@@ -50,9 +47,8 @@ class IdentifierQuotingTest {
 
   @Test
   void anEntityWithAnEmbeddedValueIsRefusedRatherThanProjectedWithoutIt() {
-    // An embedded value's properties are columns of this table. Skipping them would emit a SELECT
-    // that omits real columns and hydrate an object whose embedded field is silently null — which
-    // a read-modify-write then writes back over the real data.
+    // An embedded value's properties are columns of this table. Skipping them would hydrate the
+    // embedded field silently null, which a read-modify-write then writes back over the real data.
     assertThatExceptionOfType(IllegalArgumentException.class)
         .isThrownBy(() -> renderer.render(FluentSelect.from(EntityRef.of(Person.class))))
         .withMessageContaining("address")

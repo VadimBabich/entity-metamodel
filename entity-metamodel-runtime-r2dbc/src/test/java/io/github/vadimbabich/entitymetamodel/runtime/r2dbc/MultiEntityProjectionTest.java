@@ -1,15 +1,15 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ACCOUNT;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.MEMBERSHIP;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.owningAccount;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.sponsoringAccount;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
-import io.github.vadimbabich.entitymetamodel.runtime.JoinRef;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
-import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Membership;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.r2dbc.dialect.PostgresDialect;
-import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
 /**
  * Joining a table and reading it back are separate choices: most joins exist to filter, and
@@ -18,26 +18,12 @@ import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
  */
 class MultiEntityProjectionTest {
 
-  private static final EntityRef<Membership> MEMBERSHIP = EntityRef.of(Membership.class);
-  private static final EntityRef<Account> ACCOUNT = EntityRef.of(Account.class);
-
-  private final QueryRenderer renderer =
-      new QueryRenderer(new R2dbcMappingContext(), PostgresDialect.INSTANCE);
-
-  private static JoinRef<Membership, Account> account() {
-    return JoinRef.of(
-        MEMBERSHIP.property("accountId", Long.class), ACCOUNT.property("id", Long.class));
-  }
-
-  private static JoinRef<Membership, Account> sponsorAccount() {
-    return JoinRef.of(
-        MEMBERSHIP.property("sponsorAccountId", Long.class), ACCOUNT.property("id", Long.class));
-  }
+  private final QueryRenderer renderer = TestRenderers.postgres();
 
   @Test
   void aJoinedInstanceIsNotProjectedUnlessItIsAskedFor() {
     RenderedStatement statement =
-        renderer.render(FluentSelect.from(MEMBERSHIP).join(account()));
+        renderer.render(FluentSelect.from(MEMBERSHIP).join(owningAccount()));
 
     assertThat(statement.sql()).doesNotContain("account__");
   }
@@ -45,7 +31,7 @@ class MultiEntityProjectionTest {
   @Test
   void anAskedForInstanceContributesItsColumnsUnderItsOwnLabels() {
     RenderedStatement statement =
-        renderer.render(FluentSelect.from(MEMBERSHIP).join(account()).alsoSelect(ACCOUNT));
+        renderer.render(FluentSelect.from(MEMBERSHIP).join(owningAccount()).alsoSelect(ACCOUNT));
 
     assertThat(statement.sql())
         .contains("\"membership\".\"membership_id\" AS \"membership__membership_id\"")
@@ -59,8 +45,8 @@ class MultiEntityProjectionTest {
     RenderedStatement statement =
         renderer.render(
             FluentSelect.from(MEMBERSHIP)
-                .join(account())
-                .join(sponsorAccount(), sponsor)
+                .join(owningAccount())
+                .join(sponsoringAccount(), sponsor)
                 .alsoSelect(ACCOUNT)
                 .alsoSelect(sponsor));
 
@@ -78,8 +64,8 @@ class MultiEntityProjectionTest {
 
   @Test
   void aCountRejectsEveryDescriptionThePageRejects() {
-    // A paged endpoint asks for the total and the page from one description. If only one terminal
-    // validates, the other fails later and elsewhere.
+    // A paged endpoint asks for the total and the page from one description, so if only one
+    // terminal validates the other fails later and elsewhere.
     assertThatExceptionOfType(IllegalArgumentException.class)
         .isThrownBy(() -> renderer.renderCount(FluentSelect.from(MEMBERSHIP).alsoSelect(ACCOUNT)))
         .withMessageContaining("not part of this statement");
@@ -90,7 +76,7 @@ class MultiEntityProjectionTest {
     RenderedStatement statement =
         renderer.render(
             FluentSelect.from(MEMBERSHIP)
-                .join(account())
+                .join(owningAccount())
                 .alsoSelect(ACCOUNT)
                 .alsoSelect(ACCOUNT));
 

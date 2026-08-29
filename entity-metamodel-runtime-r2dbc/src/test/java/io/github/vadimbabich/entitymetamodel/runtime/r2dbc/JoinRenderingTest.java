@@ -1,5 +1,10 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ACCOUNT;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.MEMBERSHIP;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.memberships;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.owningAccount;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.sponsoringAccount;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
@@ -13,35 +18,19 @@ import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Employee;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Membership;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.r2dbc.dialect.PostgresDialect;
-import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
 /**
  * A {@link JoinRef} names a relationship, so joining it brings the <em>target</em> instance in
- * while the source must already be there. Traversing one relationship N times is therefore a matter
- * of naming N instances, which is why refs carry instance identity.
+ * while the source must already be there. Traversing one relationship N times is a matter of
+ * naming N instances, which is why refs carry instance identity.
  */
 class JoinRenderingTest {
 
-  private static final EntityRef<Membership> MEMBERSHIP = EntityRef.of(Membership.class);
-  private static final EntityRef<Account> ACCOUNT = EntityRef.of(Account.class);
-
-  private final QueryRenderer renderer =
-      new QueryRenderer(new R2dbcMappingContext(), PostgresDialect.INSTANCE);
-
-  private static JoinRef<Membership, Account> account() {
-    return JoinRef.of(
-        MEMBERSHIP.property("accountId", Long.class), ACCOUNT.property("id", Long.class));
-  }
-
-  private static JoinRef<Membership, Account> sponsorAccount() {
-    return JoinRef.of(
-        MEMBERSHIP.property("sponsorAccountId", Long.class), ACCOUNT.property("id", Long.class));
-  }
+  private final QueryRenderer renderer = TestRenderers.postgres();
 
   @Test
   void joiningARelationshipAddsItsTargetTableUnderAnOnCondition() {
-    RenderedStatement statement = renderer.render(FluentSelect.from(MEMBERSHIP).join(account()));
+    RenderedStatement statement = renderer.render(FluentSelect.from(MEMBERSHIP).join(owningAccount()));
 
     assertThat(statement.sql())
         .contains(
@@ -53,7 +42,7 @@ class JoinRenderingTest {
   @Test
   void aLeftOuterJoinKeepsRowsWithoutAMatch() {
     RenderedStatement statement =
-        renderer.render(FluentSelect.from(MEMBERSHIP).leftOuterJoin(account()));
+        renderer.render(FluentSelect.from(MEMBERSHIP).leftOuterJoin(owningAccount()));
 
     assertThat(statement.sql())
         .contains(
@@ -68,7 +57,7 @@ class JoinRenderingTest {
 
     RenderedStatement statement =
         renderer.render(
-            FluentSelect.from(MEMBERSHIP).join(account()).join(sponsorAccount(), sponsor));
+            FluentSelect.from(MEMBERSHIP).join(owningAccount()).join(sponsoringAccount(), sponsor));
 
     assertThat(statement.sql())
         .contains(
@@ -126,7 +115,7 @@ class JoinRenderingTest {
 
     Condition eitherAccount =
         SqlExpr.raw(
-            "COALESCE(?, ?) = ?", sponsorAccountId, accountId,
+            "COALESCE({0}, {1}) = {2}", sponsorAccountId, accountId,
             ACCOUNT.property("id", Long.class).of(sponsor));
 
     RenderedStatement statement =
@@ -150,7 +139,7 @@ class JoinRenderingTest {
         .isThrownBy(
             () ->
                 FluentSelect.from(MEMBERSHIP)
-                    .join(account())
+                    .join(owningAccount())
                     .join(ACCOUNT)
                     .on(sameAccount))
         .withMessageContaining("already part of this statement");
@@ -201,19 +190,17 @@ class JoinRenderingTest {
 
   @Test
   void aCrossTypeRelationshipAnchorsToTheInstanceItNamesEvenWithASecondSourcePresent() {
-    // A second Account instance for an unrelated hop. This relationship targets a Membership, so
-    // the declared anchor is the contract and refusing would break a shape that renders correctly.
+    // This relationship targets a Membership, so the declared anchor is the contract: refusing
+    // because a second Account instance is present would break a shape that renders correctly.
     EntityRef<Account> sponsor = ACCOUNT.as("sponsor");
     PropertyRef<Account, Long> accountId = ACCOUNT.property("id", Long.class);
-    JoinRef<Account, Membership> memberships =
-        JoinRef.of(accountId, MEMBERSHIP.property("accountId", Long.class));
 
     RenderedStatement statement =
         renderer.render(
             FluentSelect.from(ACCOUNT)
                 .join(sponsor)
                 .on(accountId.eq(accountId.of(sponsor)))
-                .join(memberships));
+                .join(memberships()));
 
     assertThat(statement.sql())
         .contains("JOIN \"memberships\" \"membership\""
@@ -250,26 +237,22 @@ class JoinRenderingTest {
 
   @Test
   void anAbsentDeclaredSourceSaysWhatToDoAcrossTypesToo() {
-    // Hop 1 lands on a named Membership, so hop 2's declared source is not in the statement. The
-    // same failure as the self-referencing case deserves the same answer, not an unknown table.
+    // Hop 1 lands on a named Membership, so hop 2's declared source is not in the statement — the
+    // same failure as the self-referencing case, and it deserves the same answer.
     EntityRef<Account> sponsor = ACCOUNT.as("sponsor");
-    JoinRef<Account, Membership> memberships =
-        JoinRef.of(
-            ACCOUNT.property("id", Long.class),
-            MEMBERSHIP.property("accountId", Long.class));
 
     FluentSelect<Account> throughANamedMembership =
-        FluentSelect.from(ACCOUNT).join(memberships, MEMBERSHIP.as("m2"));
+        FluentSelect.from(ACCOUNT).join(memberships(), MEMBERSHIP.as("m2"));
 
     assertThatExceptionOfType(IllegalArgumentException.class)
-        .isThrownBy(() -> throughANamedMembership.join(sponsorAccount(), sponsor))
+        .isThrownBy(() -> throughANamedMembership.join(sponsoringAccount(), sponsor))
         .withMessageContaining("does not carry");
   }
 
   @Test
   void joiningTheSameInstanceTwiceIsRejected() {
     assertThatExceptionOfType(IllegalArgumentException.class)
-        .isThrownBy(() -> FluentSelect.from(MEMBERSHIP).join(account()).join(sponsorAccount()))
+        .isThrownBy(() -> FluentSelect.from(MEMBERSHIP).join(owningAccount()).join(sponsoringAccount()))
         .withMessageContaining("already part of this statement");
   }
 
@@ -292,7 +275,7 @@ class JoinRenderingTest {
     RenderedStatement statement =
         renderer.render(
             FluentSelect.from(MEMBERSHIP)
-                .join(account())
+                .join(owningAccount())
                 .where(ownerEmail.is("owner@example.com")));
 
     assertThat(statement.sql()).endsWith("WHERE \"account\".\"owner_email\" = $1");
@@ -330,7 +313,7 @@ class JoinRenderingTest {
 
     RenderedStatement statement =
         renderer.render(
-            FluentSelect.from(MEMBERSHIP).join(sponsorAccount(), sponsor).join(account()));
+            FluentSelect.from(MEMBERSHIP).join(sponsoringAccount(), sponsor).join(owningAccount()));
 
     assertThat(statement.sql())
         .containsSubsequence(

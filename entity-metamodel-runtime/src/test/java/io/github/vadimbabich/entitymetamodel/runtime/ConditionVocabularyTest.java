@@ -5,8 +5,10 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import io.github.vadimbabich.entitymetamodel.runtime.fixtures.Account;
+
 import java.util.ArrayList;
 import java.util.List;
+
 import org.junit.jupiter.api.Test;
 
 /**
@@ -113,7 +115,7 @@ class ConditionVocabularyTest {
             id.in(List.of(1L, 2L)).not(),
             id.isNull().not(),
             id.is(1L).and(id.gt(0L)).not(),
-            SqlExpr.raw("owner_email = ?", "owner@example.com").not()))
+            SqlExpr.raw("owner_email = {0}", "owner@example.com").not()))
         .allMatch(Negation.class::isInstance);
   }
 
@@ -134,11 +136,11 @@ class ConditionVocabularyTest {
   }
 
   @Test
-  void aRawFragmentCarriesItsPlaceholdersAndValuesSeparately() {
-    Condition lowercasedEmail = SqlExpr.raw("lower(owner_email) = ?", "owner@example.com");
+  void aRawFragmentCarriesItsTemplateAndItsArgumentsSeparately() {
+    Condition lowercasedEmail = SqlExpr.raw("lower(owner_email) = {0}", "owner@example.com");
 
     assertThat(lowercasedEmail)
-        .isEqualTo(new SqlExpr("lower(owner_email) = ?", List.of("owner@example.com")));
+        .isEqualTo(new SqlExpr("lower(owner_email) = {0}", List.of("owner@example.com")));
   }
 
   @Test
@@ -155,21 +157,10 @@ class ConditionVocabularyTest {
   void aRawFragmentTakesAPropertyAsAColumnAndAnythingElseAsAValue() {
     PropertyRef<Account, String> ownerEmail = ACCOUNT.property("ownerEmail", String.class);
 
-    SqlExpr lowercasedMatch = SqlExpr.raw("lower(?) = lower(?)", ownerEmail, "OWNER@example.com");
+    SqlExpr lowercasedMatch = SqlExpr.raw("lower({0}) = lower({1})", ownerEmail, "OWNER@example.com");
 
     assertThat(lowercasedMatch.arguments())
         .containsExactly(ownerEmail, "OWNER@example.com");
-  }
-
-  @Test
-  void aRawFragmentWhosePlaceholdersDoNotMatchItsValuesIsRejected() {
-    assertThatExceptionOfType(IllegalArgumentException.class)
-        .isThrownBy(() -> SqlExpr.raw("owner_email = ? OR owner_email = ?", "only-one"))
-        .withMessageContaining("2 placeholder");
-
-    assertThatExceptionOfType(IllegalArgumentException.class)
-        .isThrownBy(() -> SqlExpr.raw("owner_email = ?", "first", "second"))
-        .withMessageContaining("1 placeholder");
   }
 
   @Test

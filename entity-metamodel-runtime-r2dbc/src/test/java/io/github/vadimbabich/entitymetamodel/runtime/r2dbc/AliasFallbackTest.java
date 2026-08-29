@@ -10,13 +10,11 @@ import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.LongColumnRecord;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.NotificationPreferenceSnapshot;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.r2dbc.dialect.PostgresDialect;
-import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
 /**
  * PostgreSQL truncates an identifier past 63 bytes silently, and two labels agreeing in their first
- * 63 bytes become one column in the row. So a statement whose labels would overflow renames every
- * table in it — whole-statement, so one description has one rendering.
+ * 63 bytes become one column in the row. A statement whose labels would overflow therefore renames
+ * every table in it, whole-statement, so one description has one rendering.
  */
 class AliasFallbackTest {
 
@@ -26,8 +24,7 @@ class AliasFallbackTest {
   private static final EntityRef<LongColumnRecord> LONG_COLUMNS =
       EntityRef.of(LongColumnRecord.class);
 
-  private final QueryRenderer renderer =
-      new QueryRenderer(new R2dbcMappingContext(), PostgresDialect.INSTANCE);
+  private final QueryRenderer renderer = TestRenderers.postgres();
 
   @Test
   void aStatementWhoseLabelsFitKeepsTheInstancesOwnAliases() {
@@ -75,9 +72,8 @@ class AliasFallbackTest {
 
   @Test
   void aLabelThatOverflowsEvenUnderPositionalAliasesIsRefusedRatherThanTruncated() {
-    // The fallback is not a guarantee: a two-byte alias plus the separator leaves 59 bytes for the
-    // column. Refused loudly, because the alternative is an entity hydrating with those columns
-    // null while the row carried values.
+    // Not a guarantee: a two-byte alias plus the separator leaves 59 bytes for the column. Refused
+    // loudly, because the alternative hydrates those columns null from a row that carried values.
     assertThatExceptionOfType(IllegalArgumentException.class)
         .isThrownBy(() -> renderer.render(FluentSelect.from(EntityRef.of(LongColumnRecord.class))))
         .withMessageContaining("identifier limit")
@@ -86,8 +82,8 @@ class AliasFallbackTest {
 
   @Test
   void anInstanceJoinedOnlyToFilterIsNeverMeasuredForLabelsItDoesNotEmit() {
-    // Joining a wide table purely to filter is ordinary, and none of its columns are projected, so
-    // nothing of its can truncate. The overflow still drives the statement to positional aliases.
+    // Joining a wide table purely to filter is ordinary: none of its columns are projected, so none
+    // of them can truncate. The overflow still drives the statement to positional aliases.
     PropertyRef<Account, Long> accountId = ACCOUNT.property("id", Long.class);
     PropertyRef<LongColumnRecord, Long> recordId = LONG_COLUMNS.property("id", Long.class);
 

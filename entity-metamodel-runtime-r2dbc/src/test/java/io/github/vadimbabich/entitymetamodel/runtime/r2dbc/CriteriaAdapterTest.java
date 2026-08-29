@@ -1,16 +1,18 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ACCOUNT;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.MEMBERSHIP;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.owningAccount;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import io.github.vadimbabich.entitymetamodel.runtime.Condition;
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
-import io.github.vadimbabich.entitymetamodel.runtime.JoinRef;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.AccessGrant;
-import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
-import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Membership;
+
 import java.util.List;
 import java.util.Optional;
+
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
@@ -27,14 +29,33 @@ import org.springframework.data.relational.core.sql.SqlIdentifier;
  */
 class CriteriaAdapterTest {
 
-  private static final EntityRef<Account> ACCOUNT = EntityRef.of(Account.class);
-  private static final EntityRef<Membership> MEMBERSHIP = EntityRef.of(Membership.class);
   private static final EntityRef<AccessGrant> GRANT = EntityRef.of(AccessGrant.class);
 
   private final R2dbcMappingContext mappingContext = new R2dbcMappingContext();
   private final QueryRenderer renderer =
       new QueryRenderer(mappingContext, PostgresDialect.INSTANCE);
   private final CriteriaAdapter adapter = new CriteriaAdapter(mappingContext);
+
+  /**
+   * Applications arrive with criteria built from column names, and a column name that matches a
+   * different property's name would filter the wrong column silently. Refusing is right, but the
+   * refusal has to name the property to use instead.
+   */
+  @Test
+  void aFilterNamingAColumnIsRefusedWithThePropertyToNameInstead() {
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> adapter.toCondition(Criteria.where("account_id").is(1L), ACCOUNT))
+        .withMessageContaining("account_id")
+        .withMessageContaining("'id'");
+  }
+
+  @Test
+  void aFilterNamingNeitherAPropertyNorAColumnIsRefusedNamingTheEntity() {
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> adapter.toCondition(Criteria.where("nowhere").is(1L), ACCOUNT))
+        .withMessageContaining("Account")
+        .withMessageContaining("nowhere");
+  }
 
   private RenderedStatement accountsMatching(CriteriaDefinition criteria) {
     Condition filter = adapter.toCondition(criteria, ACCOUNT).orElseThrow();
@@ -147,9 +168,9 @@ class CriteriaAdapterTest {
 
   @Test
   void aGroupJoinsEveryMemberWithTheGroupsOwnCombinator() {
-    // Measured against the substrate's mapper: one combinator applies to every member, so a member
-    // whose chain ends in `.or(...)` does not make the group disjunctive. Reading it off each
-    // member turns `from(scope, search)` into `scope OR search`, and the scope stops constraining.
+    // From the substrate's mapper: one combinator applies to every member, so a member whose chain
+    // ends in `.or(...)` does not make the group disjunctive. Reading it off each member turns
+    // `from(scope, search)` into `scope OR search`, and the scope stops constraining.
     CriteriaDefinition searchEndingInOr =
         Criteria.where("ownerEmail").like("%q%").or("state").is("ACTIVE");
 
@@ -276,9 +297,8 @@ class CriteriaAdapterTest {
         .endsWith("WHERE NOT (\"account\".\"owner_email\" IS NULL)");
   }
 
-  // By hand because Criteria cannot express it: its builder rejects a null value while the
-  // CriteriaDefinition interface declares it nullable, so a converter implementing the interface
-  // can hand over exactly this.
+  // By hand because Criteria's builder rejects a null value while the CriteriaDefinition interface
+  // declares it nullable — a converter implementing the interface can hand over exactly this.
   @NullMarked
   private record NullValued(
       CriteriaDefinition.Comparator comparator) implements CriteriaDefinition {
@@ -338,15 +358,12 @@ class CriteriaAdapterTest {
 
   @Test
   void aCriteriaMayBeAnchoredToAJoinedInstance() {
-    JoinRef<Membership, Account> owner =
-        JoinRef.of(
-            MEMBERSHIP.property("accountId", Long.class), ACCOUNT.property("id", Long.class));
     Condition filter =
         adapter.toCondition(Criteria.where("ownerEmail").is("owner@example.com"), ACCOUNT)
             .orElseThrow();
 
     RenderedStatement statement =
-        renderer.render(FluentSelect.from(MEMBERSHIP).join(owner).where(filter));
+        renderer.render(FluentSelect.from(MEMBERSHIP).join(owningAccount()).where(filter));
 
     assertThat(statement.sql()).endsWith("WHERE \"account\".\"owner_email\" = $1");
   }

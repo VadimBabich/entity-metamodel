@@ -32,12 +32,39 @@ final class PropertyNameResolver {
         persistentEntity.getPersistentProperty(propertyName);
 
     if (persistentProperty == null) {
-      throw new IllegalArgumentException(
-          instance.entityType().getSimpleName() + " persists no property named '" + propertyName
-              + "'. A name arriving as text is resolved against the entity's own properties — not"
-              + " against a column name, and not along a path through a join");
+      throw unresolvable(instance, persistentEntity, propertyName);
     }
 
     return instance.property(propertyName, persistentProperty.getType());
+  }
+
+  // A column name is the near miss worth naming: an application arriving here resolves its own
+  // column names today, so that is the mistake it will make, once per call site.
+  private static IllegalArgumentException unresolvable(
+      EntityRef<?> instance, RelationalPersistentEntity<?> persistentEntity, String name) {
+
+    String entityName = instance.entityType().getSimpleName();
+
+    for (RelationalPersistentProperty property : persistentEntity) {
+      // Neither owns a column of this table: an embedded value spreads over several, and a
+      // relationship's value lives in the referenced table.
+      if (property.isEmbedded() || property.isEntity()) {
+        continue;
+      }
+
+      if (property.getColumnName().getReference().equalsIgnoreCase(name)) {
+        return new IllegalArgumentException(
+            "'" + name + "' is the column of " + entityName + "'s property '" + property.getName()
+                + "' — name the property instead. Names arriving as text resolve against the"
+                + " entity's properties, never against columns, because one entity's column name"
+                + " can be another property's name and would then filter the wrong column with"
+                + " nothing to notice");
+      }
+    }
+
+    return new IllegalArgumentException(
+        entityName + " persists no property named '" + name + "'. A name arriving as text is"
+            + " resolved against the entity's own properties — not against a column name, and not"
+            + " along a path through a join");
   }
 }
