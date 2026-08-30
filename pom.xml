@@ -53,7 +53,7 @@
 
   <properties>
     <java.release>17</java.release>
-    <maven-enforcer-plugin.version>3.5.0</maven-enforcer-plugin.version>
+    <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <!-- Stamped by the release workflow, not by any plugin. Never hand-edit mid-cycle. -->
     <project.build.outputTimestamp>2026-08-08T00:00:00Z</project.build.outputTimestamp>
