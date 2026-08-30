@@ -66,7 +66,7 @@
     <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
     <maven-failsafe-plugin.version>3.5.6</maven-failsafe-plugin.version>
 
-    <junit.version>5.13.1</junit.version>
+    <junit.version>6.1.3</junit.version>
     <assertj-core.version>3.27.7</assertj-core.version>
     <!-- Supported substrate range is Spring Data 4.0.x-4.1.x. One property for all three of its
          artifacts on purpose: they ship as one release train and mixing them is unsupported, so a
