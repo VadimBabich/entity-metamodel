@@ -84,7 +84,7 @@
          driven through r2dbc-postgresql. Never compile-scope. -->
     <testcontainers.version>2.0.5</testcontainers.version>
     <r2dbc-postgresql.version>1.1.2.RELEASE</r2dbc-postgresql.version>
-    <netty.version>4.1.137.Final</netty.version>
+    <netty.version>4.2.17.Final</netty.version>
   </properties>
 
   <build>
