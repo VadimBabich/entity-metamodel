@@ -130,6 +130,41 @@ class ExecutorAssemblyTest {
   }
 
   @Test
+  void aMappedPageIsAlsoJustADescriptionUntilSomethingSubscribes() {
+    Mono<Page<String>> unsubscribedPage =
+        executor.page(
+            FluentSelect.from(ACCOUNT),
+            PageRequest.of(0, 20),
+            row -> row.read(ACCOUNT).ownerEmail);
+
+    assertThat(unsubscribedPage).isInstanceOf(Publisher.class);
+    assertThat(connectionFactory.connectionsRequested).isZero();
+  }
+
+  @Test
+  void aMappedPageReportsABadSortPropertyThroughThePublisherRatherThanByThrowing() {
+    Mono<Page<String>> page =
+        executor.page(
+            FluentSelect.from(ACCOUNT),
+            PageRequest.of(0, 10, Sort.by("nickname")),
+            row -> row.read(ACCOUNT).ownerEmail);
+
+    StepVerifier.create(page).expectError(IllegalArgumentException.class).verify();
+    assertThat(connectionFactory.connectionsRequested).isZero();
+  }
+
+  @Test
+  void aMappedPageRejectsAMissingDescriptionRequestOrMapper() {
+    assertThatNullPointerException()
+        .isThrownBy(() -> executor.page(null, Pageable.unpaged(), row -> row.read(ACCOUNT)));
+    assertThatNullPointerException()
+        .isThrownBy(
+            () -> executor.page(FluentSelect.from(ACCOUNT), null, row -> row.read(ACCOUNT)));
+    assertThatNullPointerException()
+        .isThrownBy(() -> executor.page(FluentSelect.from(ACCOUNT), PageRequest.of(0, 10), null));
+  }
+
+  @Test
   void aMissingCollaboratorOrDescriptionIsRejectedImmediately() {
     assertThatNullPointerException()
         .isThrownBy(() -> new MetamodelQueryExecutor(null, null, null));
@@ -137,9 +172,6 @@ class ExecutorAssemblyTest {
     assertThatNullPointerException().isThrownBy(() -> executor.exists(null));
   }
 
-  /**
-   * Records that it was asked, so a test can assert nothing subscribed.
-   */
   @NullMarked
   private static final class RefusingConnectionFactory implements ConnectionFactory {
 

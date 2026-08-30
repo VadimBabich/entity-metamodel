@@ -1,10 +1,14 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.MEMBERSHIP;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.SPONSOR;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.sponsoringAccount;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
+import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Membership;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -126,6 +130,28 @@ class PageableTranslationTest {
     assertThatExceptionOfType(IllegalArgumentException.class)
         .isThrownBy(() -> sqlOf(PageRequest.of(0, 10, Sort.by("nickname"))))
         .withMessageContaining("nickname");
+  }
+
+  /**
+   * A name only the joined side persists is refused, but a name both tables persist orders by the
+   * root's column with nothing to notice — including under the mapper form of {@code page}.
+   */
+  @Test
+  void aTextSortResolvesAgainstTheRootEvenWhereAJoinedInstanceIsSelected() {
+    FluentSelect<Membership> sponsored =
+        FluentSelect.from(MEMBERSHIP).join(sponsoringAccount(), SPONSOR).alsoSelect(SPONSOR);
+
+    String sql =
+        renderer.render(translator.applyTo(sponsored, PageRequest.of(0, 2, Sort.by("id")))).sql();
+
+    assertThat(sql)
+        .contains("ORDER BY \"membership\".\"membership_id\" ASC")
+        .doesNotContain("\"account_sponsor\".\"account_id\" ASC");
+
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(
+            () -> translator.applyTo(sponsored, PageRequest.of(0, 2, Sort.by("ownerEmail"))))
+        .withMessageContaining("ownerEmail");
   }
 
   @Test

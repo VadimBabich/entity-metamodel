@@ -2,7 +2,9 @@ package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ACCOUNT;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.MEMBERSHIP;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.SPONSOR;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.owningAccount;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.sponsoringAccount;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
@@ -366,6 +368,38 @@ class CriteriaAdapterTest {
         renderer.render(FluentSelect.from(MEMBERSHIP).join(owningAccount()).where(filter));
 
     assertThat(statement.sql()).endsWith("WHERE \"account\".\"owner_email\" = $1");
+  }
+
+  /**
+   * The instance the caller names decides the qualifier. Resolving against the entity type would
+   * take the default alias and filter the wrong side of a self-join.
+   */
+  @Test
+  void aCriteriaMayBeAnchoredToAnAliasedSecondInstance() {
+    Condition filter =
+        adapter.toCondition(Criteria.where("ownerEmail").is("second@example.com"), SPONSOR)
+            .orElseThrow();
+
+    RenderedStatement statement =
+        renderer.render(
+            FluentSelect.from(MEMBERSHIP).join(sponsoringAccount(), SPONSOR).where(filter));
+
+    assertThat(statement.sql()).endsWith("WHERE \"account_sponsor\".\"owner_email\" = $1");
+  }
+
+  /**
+   * The substrate qualifies a dotted path's leaf against the root table, which is either a database
+   * error or, where the root owns a column of that name, silently the wrong column.
+   */
+  @Test
+  void aCriteriaNamingAPathThroughAJoinIsRefusedWithTheReasonNotJustTheName() {
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(
+            () ->
+                adapter.toCondition(
+                    Criteria.where("account.ownerEmail").is("owner@example.com"), MEMBERSHIP))
+        .withMessageContaining("persists no property named 'account.ownerEmail'")
+        .withMessageContaining("not along a path through a join");
   }
 
   @Test
