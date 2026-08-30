@@ -224,6 +224,9 @@ public final class FluentSelect<E> {
    * multiplies the entity a listing is about. The total and the probe follow, the total at the
    * price of running the selection as a derived table.
    *
+   * <p>Distinctness is over the whole projected column list, not over what a mapper later narrows
+   * a row to, so reading one column back out of distinct rows can still repeat.
+   *
    * <p>Sorting a distinct description by a column it does not project is a database error, since
    * {@code DISTINCT} decides which rows survive before the sort runs.
    */

@@ -34,6 +34,10 @@ public final class MetamodelQueryExecutor {
   private final R2dbcConverter converter;
   private final PageableTranslator pageableTranslator;
 
+  // A projection's shape depends only on the result type and the entity, so it is decided once
+  // and held for this executor's lifetime rather than rebuilt on every row.
+  private final ProjectionResolver projections;
+
   /**
    * The renderer and converter must share one mapping context: one names a column when projecting
    * it and the other when reading it back, so two contexts produce rows nothing claims.
@@ -45,6 +49,7 @@ public final class MetamodelQueryExecutor {
     this.renderer = Objects.requireNonNull(renderer, "renderer");
     this.converter = Objects.requireNonNull(converter, "converter");
     this.pageableTranslator = new PageableTranslator(renderer.mappingContext());
+    this.projections = new ProjectionResolver(converter);
   }
 
   public <E> Flux<E> all(FluentSelect<E> select) {
@@ -70,7 +75,8 @@ public final class MetamodelQueryExecutor {
         .map(
             projectedColumns ->
                 mapper.apply(
-                    new ProjectedRow(projectedColumns, converter, statement.aliases())));
+                    new ProjectedRow(
+                        projectedColumns, converter, statement.aliases(), projections)));
   }
 
   /**
@@ -160,20 +166,42 @@ public final class MetamodelQueryExecutor {
    */
   public <E> Mono<Page<E>> page(FluentSelect<E> select, Pageable pageable) {
     Objects.requireNonNull(select, "select");
+
+    EntityRef<E> selected = select.entity();
+
+    return page(select, pageable, row -> row.read(selected));
+  }
+
+  /**
+   * The mapper form, for a page whose rows carry more than one instance or are read back as
+   * projections. The sort, the total and the unpaged short-circuit behave as they do for entities.
+   *
+   * <p>Sort terms resolve against the description's root instance, not against what the mapper
+   * reads — a name arriving as text cannot say which side of a join it means. A name the root does
+   * not persist arrives as an error signal; a name both tables persist orders by the root with
+   * nothing to notice. An {@code orderBy} on the description cannot correct that, since the
+   * request's terms lead and the description's follow as tiebreakers — root the description at the
+   * instance being listed instead.
+   */
+  public <R> Mono<Page<R>> page(
+      FluentSelect<?> select, Pageable pageable, Function<ProjectedRow, R> mapper) {
+
+    Objects.requireNonNull(select, "select");
     Objects.requireNonNull(pageable, "pageable");
+    Objects.requireNonNull(mapper, "mapper");
 
     return Mono.defer(
         () -> {
-          FluentSelect<E> onePage = pageableTranslator.applyTo(select, pageable);
+          FluentSelect<?> onePage = pageableTranslator.applyTo(select, pageable);
 
           // Sequential, not zipped: inside a transaction both statements share one connection, and
           // two at once on one connection is a protocol error.
-          return list(onePage).flatMap(rows -> pageOf(rows, select, pageable));
+          return all(onePage, mapper).collectList().flatMap(rows -> pageOf(rows, select, pageable));
         });
   }
 
-  private <E> Mono<Page<E>> pageOf(
-      List<E> rows, FluentSelect<E> select, Pageable pageable) {
+  private <R> Mono<Page<R>> pageOf(
+      List<R> rows, FluentSelect<?> select, Pageable pageable) {
 
     if (pageable.isUnpaged() && select.limit().isEmpty() && select.offset().isEmpty()) {
       // Nothing was left behind, so the rows in hand are the total. A description with a window of

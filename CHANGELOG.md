@@ -5,7 +5,9 @@
 The `entity-metamodel` family — `core`, `runtime`, `processor` and a BOM — is built in this
 repository and **not published**. It holds the model vocabulary, the reference types (`EntityRef`,
 `PropertyRef`, `JoinRef`) that generated code compiles against, the owned `@Generated` and
-`@RawSql` markers, and the annotation processor that generates metamodels.
+`@RawSql` markers, and the annotation processor that generates metamodels. The supported substrate
+is `spring-data-relational` / `spring-data-r2dbc` 4.0.x–4.1.x, the lines still in OSS support, so
+an application on the 3.5.x line upgrades before adopting the runtime.
 
 **`entity-metamodel-processor` generates.** It reads `@Table` types through `javax.lang.model`
 rather than by parsing sources — discovery needs the `@Table` annotation itself, since the compiler
@@ -82,6 +84,47 @@ no label of its is emitted.
 A page request's sort leads any sort the description already carries, and a sort property the entity
 does not persist arrives as an error signal on the returned publisher rather than as a thrown
 exception — it is request data, so a handler can map it to a bad-request response.
+
+`page` takes a mapper alongside `all`, so a projected or multi-entity listing gets its page and
+total from the library rather than being assembled by hand — the content and the count run in
+sequence, which is what a shared connection inside a transaction requires and what a hand-rolled
+`zip` gets wrong. `distinct()` collapses whole selected rows, not what a mapper narrows them to.
+
+A row can also be read back as a projection rather than as a whole entity: `readProjection` takes a
+closed interface whose accessors name the instance's properties, or a DTO, so a listing can carry
+two columns of a joined table without hydrating it. The select list is unchanged — a projection
+narrows the object, not the query. The two forms narrow differently: a DTO reads only the
+properties it declares, while an interface projection reads and converts every property of the
+instance and narrows only the object handed back, so a column whose reading converter rejects the
+stored value fails an interface projection that never names it. Absence works as it does for an
+entity: an instance the outer join did not match is empty rather than a proxy answering null to
+everything. Two shapes are refused rather than served quietly, both on interface projections, whose
+accessors are the whole of what they read. An open projection, whose values come from a `@Value`
+expression instead of a column, is refused because the expression is not evaluated here. And an
+accessor naming a property the entity does not persist is refused naming it — an interface has no
+compile-time link to the entity, so renaming a property would otherwise leave every projection
+still compiling and answering null for that field on every row. A DTO is bound by the substrate
+from its own fields, which may carry their own `@Column`, bind without accessors, or be computed
+locally; it is passed through unchecked, so a stale field reads null there, a stale primitive
+constructor parameter fails to bind, and a stale primitive field quietly takes the type's default —
+exactly as through the substrate, and a `@Value` constructor parameter is evaluated rather than
+refused. Where an entity is built by a registered `Converter<RowDocument, T>`, projecting it is
+refused outright rather than silently bypassing that converter: the two doors would otherwise
+disagree about the same row, and where the converter redacts a column the projection is the one
+that leaks it. The substrate's own template does bypass it — the same projection through an
+`R2dbcEntityTemplate` succeeds and returns the stored value — so this is a deliberate difference
+rather than a wart being fixed, and code migrating off the template meets it as a refusal where it
+previously got an answer.
+
+Because rows are materialised from their own columns rather than through an entity template, only
+part of Spring's read machinery applies, and the boundary is worth stating. Property-level reading
+converters work on both doors. An entity-level `Converter<RowDocument, T>` applies when reading a
+whole entity but is not consulted when projecting, which reads properties directly — so a converter
+that decrypts or redacts a column does not cover a projection of it. An entity-level
+`Converter<Row, T>` and `AfterConvertCallback` never run at all — the first is consulted only where
+a driver row is the source, and the second needs callbacks resolved from an application context,
+which this library neither registers nor holds. Logic that has to run after an entity is read
+belongs in the mapper the executor takes.
 
 Nothing is published yet. The first publication will be the version that generates *and* executes,
 rather than a milestone of parts — see [`ROADMAP.md`](ROADMAP.md).

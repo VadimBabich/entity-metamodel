@@ -2,6 +2,7 @@ package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ACCOUNT;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.MEMBERSHIP;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.SPONSOR;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.memberships;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ownerEmail;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.owningAccount;
@@ -492,6 +493,30 @@ class MetamodelQueryExecutorIT {
   }
 
   @Test
+  void anExternallyBuiltFilterScopedToAJoinedInstanceFiltersThatInstancesRows() {
+    // Membership 12 is owned by account 2 but sponsored by account 1, so a filter resolved against
+    // the owner would return it. Membership 13's sponsor does not exist and the inner join drops it.
+    Condition sponsoredBySecond =
+        criteriaAdapter
+            .toCondition(Criteria.where("ownerEmail").is("second@example.com"), SPONSOR)
+            .orElseThrow();
+
+    FluentSelect<Membership> sponsoredMemberships =
+        FluentSelect.from(MEMBERSHIP)
+            .join(sponsoringAccount(), SPONSOR)
+            .where(sponsoredBySecond)
+            .orderBy(MEMBERSHIP.property("id", Long.class).asc());
+
+    StepVerifier.create(executor.list(sponsoredMemberships))
+        .assertNext(
+            memberships ->
+                assertThat(memberships)
+                    .extracting(membership -> membership.id)
+                    .containsExactly(10L, 11L))
+        .verifyComplete();
+  }
+
+  @Test
   void anUnpagedRequestOverABoundedDescriptionStillCountsTheWholeSet() {
     // The rows in hand are the total only when nothing was left behind. A description carrying its
     // own limit leaves rows behind, so reporting its size as the total would fabricate one.
@@ -787,8 +812,7 @@ class MetamodelQueryExecutorIT {
                     Criteria.where("ownerEmail").like("%example.com"),
                     Criteria.where("id").is(1L).or("id").is(2L))),
 
-            // Shapes the rest of the matrix does not reach: a range test, the same test narrowed
-            // by a chained AND, and again wrapped as a group. Each separates the two foldings.
+            // Shapes the rest of the matrix does not reach; each separates the two foldings.
             Criteria.where("id").between(1L, 2L).or("id").is(3L),
             Criteria.where("id")
                 .between(1L, 2L)
@@ -861,21 +885,88 @@ class MetamodelQueryExecutorIT {
         .collectSortedList();
   }
 
+  interface SponsorEmail {
+    String getOwnerEmail();
+  }
+
+  @Test
+  void aJoinedInstanceReadsBackAsAProjectionOfItsOwnColumns() {
+    FluentSelect<Membership> withSponsor =
+        FluentSelect.from(MEMBERSHIP)
+            .join(sponsoringAccount(), SPONSOR)
+            .alsoSelect(SPONSOR)
+            .where(MEMBERSHIP.property("id", Long.class).is(10L));
+
+    StepVerifier.create(
+            executor.all(
+                withSponsor, row -> row.readProjection(SPONSOR, SponsorEmail.class)))
+        .assertNext(sponsor -> assertThat(sponsor.getOwnerEmail()).isEqualTo("second@example.com"))
+        .verifyComplete();
+  }
+
+  /**
+   * The shape the projection door exists for. Assembling it by hand means reproducing the
+   * sequential content-then-count rule, which fails only inside a transaction.
+   */
+  @Test
+  void aPageCanCarryAProjectionOfAJoinedInstanceWithItsTotal() {
+    FluentSelect<Membership> sponsored =
+        FluentSelect.from(MEMBERSHIP)
+            .join(sponsoringAccount(), SPONSOR)
+            .alsoSelect(SPONSOR);
+
+    StepVerifier.create(
+            executor.page(
+                sponsored,
+                PageRequest.of(0, 2, Sort.by("id")),
+                row -> row.readProjection(SPONSOR, SponsorEmail.class).getOwnerEmail()))
+        .assertNext(
+            page -> {
+              assertThat(page.getContent())
+                  .containsExactly("second@example.com", "second@example.com");
+              assertThat(page.getTotalElements()).isEqualTo(3L);
+              assertThat(page.hasNext()).isTrue();
+            })
+        .verifyComplete();
+  }
+
+  /**
+   * The two halves of this rule live in different classes, and the combination reads as if it
+   * should deduplicate.
+   */
+  @Test
+  void distinctCollapsesProjectedRowsRatherThanWhatAProjectionNarrowsThemTo() {
+    FluentSelect<Membership> distinctRows =
+        FluentSelect.from(MEMBERSHIP)
+            .join(sponsoringAccount(), SPONSOR)
+            .alsoSelect(SPONSOR)
+            .distinct()
+            .orderBy(MEMBERSHIP.property("id", Long.class).asc());
+
+    StepVerifier.create(
+            executor.all(
+                distinctRows,
+                row -> row.readProjection(SPONSOR, SponsorEmail.class).getOwnerEmail()))
+        .expectNext("second@example.com")
+        .expectNext("second@example.com")
+        .expectNext("first@example.com")
+        .verifyComplete();
+  }
+
   private record MembershipParties(Membership membership, Account owner, Account sponsor) {
   }
 
   @Test
   void oneRowYieldsTwoInstancesOfTheSameTableWithTheirOwnValues() {
-    EntityRef<Account> sponsorInstance = ACCOUNT.as("sponsor");
     JoinRef<Membership, Account> owner = owningAccount();
     JoinRef<Membership, Account> sponsor = sponsoringAccount();
 
     FluentSelect<Membership> parties =
         FluentSelect.from(MEMBERSHIP)
             .join(owner)
-            .join(sponsor, sponsorInstance)
+            .join(sponsor, SPONSOR)
             .alsoSelect(ACCOUNT)
-            .alsoSelect(sponsorInstance)
+            .alsoSelect(SPONSOR)
             .where(MEMBERSHIP.property("id", Long.class).is(10L));
 
     StepVerifier.create(
@@ -883,7 +974,7 @@ class MetamodelQueryExecutorIT {
                 parties,
                 row ->
                     new MembershipParties(
-                        row.read(MEMBERSHIP), row.read(ACCOUNT), row.read(sponsorInstance))))
+                        row.read(MEMBERSHIP), row.read(ACCOUNT), row.read(SPONSOR))))
         .assertNext(
             party -> {
               assertThat(party.membership().id).isEqualTo(10L);
@@ -905,8 +996,6 @@ class MetamodelQueryExecutorIT {
             .alsoSelect(ACCOUNT)
             .where(MEMBERSHIP.property("id", Long.class).is(13L));
 
-    // One row still arrives — the outer join kept the membership — and the account it points at
-    // does not exist, so reading it back reports absence instead of an all-null entity.
     StepVerifier.create(executor.all(unmatched, row -> row.readOptional(ACCOUNT)))
         .assertNext(absentAccount -> assertThat(absentAccount).isEmpty())
         .verifyComplete();
@@ -928,16 +1017,16 @@ class MetamodelQueryExecutorIT {
   void aMixedCaseAliasQualifierStillHydrates() {
     // The database folds the unquoted alias, so a qualifier that is not already lower case would
     // project labels that no instance claims on the way back.
-    EntityRef<Account> sponsorInstance = ACCOUNT.as("Sponsor");
+    EntityRef<Account> mixedCaseSponsor = ACCOUNT.as("Sponsor");
     JoinRef<Membership, Account> sponsor = sponsoringAccount();
 
     FluentSelect<Membership> withSponsor =
         FluentSelect.from(MEMBERSHIP)
-            .join(sponsor, sponsorInstance)
-            .alsoSelect(sponsorInstance)
+            .join(sponsor, mixedCaseSponsor)
+            .alsoSelect(mixedCaseSponsor)
             .where(MEMBERSHIP.property("id", Long.class).is(10L));
 
-    StepVerifier.create(executor.all(withSponsor, row -> row.read(sponsorInstance)))
+    StepVerifier.create(executor.all(withSponsor, row -> row.read(mixedCaseSponsor)))
         .assertNext(account -> assertThat(account.id).isEqualTo(2L))
         .verifyComplete();
   }
