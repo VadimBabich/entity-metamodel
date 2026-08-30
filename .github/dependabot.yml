@@ -5,12 +5,14 @@ updates:
   - package-ecosystem: "maven"
     directories:
       - "/"
-      - "/jpa-metadata-maven-plugin"
       - "/entity-metamodel-core"
       - "/entity-metamodel-runtime"
+      - "/entity-metamodel-runtime-r2dbc"
+      - "/entity-metamodel-processor"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

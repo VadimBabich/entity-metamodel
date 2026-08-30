@@ -1,8 +1,8 @@
 name: Release
 
-# Mixed-version reactor: the retiring plugin on 1.1.x beside the family on 2.0.0-M*. That rules
-# out maven-release-plugin, which cuts one version for the whole reactor, so versions are set
-# ephemerally here and each line deploys on its own.
+# maven-release-plugin is not used: it commits the release version and pushes a tag, and this
+# project never commits a release version — the parent POM's own description states the rule. So the
+# version is set ephemerally here and the tag is created server-side on the checked-out commit.
 #
 # autoPublish=false / waitUntil=validated: a run leaves a VALIDATED deployment and publishes
 # nothing. Publishing is a separate, irreversible act — Central artifacts cannot be edited.
@@ -10,13 +10,6 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      line:
-        description: 'Release line — one deployment per line, never mixed'
-        required: true
-        type: choice
-        options:
-          - family
-          - plugin
       version:
         description: 'Version to release, e.g. 2.0.0-M1 (no leading v)'
         required: true
@@ -44,7 +37,6 @@ jobs:
     environment: release
 
     env:
-      LINE: ${{ inputs.line }}
       VERSION: ${{ inputs.version }}
       DRY_RUN: ${{ inputs.dry_run }}
 
@@ -67,16 +59,6 @@ jobs:
                  "Central is immutable, so a re-release must carry a higher version."
             exit 1
           fi
-
-      # Needs a parent version that is already published, and every parent version today is a
-      # SNAPSHOT. A POM whose parent resolves nowhere cannot be corrected after publication.
-      - name: Refuse the plugin line until a family release exists
-        if: inputs.line == 'plugin'
-        run: |
-          echo "::error::The plugin line is not wired yet, deliberately. It needs its parent"\
-               "pinned to an already-published entity-metamodel-parent version, and nothing is"\
-               "published yet. Release the family line first, then wire the parent pin."
-          exit 1
 
       - name: Require the publishing credentials
         env:
@@ -122,58 +104,30 @@ jobs:
             -DnewVersion="$STAMP" \
             -DgenerateBackupPoms=false
 
+          grep -q "<project.build.outputTimestamp>$STAMP<" pom.xml
+
       # Never committed or pushed; the edited tree dies with the runner.
       - name: Set the family version ephemerally
         run: |
           mvn -B -q org.codehaus.mojo:versions-maven-plugin:2.21.0:set \
             -DnewVersion="$VERSION" -DgenerateBackupPoms=false
 
-      # A family dispatch that silently moved the plugin's version would publish a plugin
-      # release by accident.
-      - name: Verify only the family line moved
-        run: |
-          python3 - "$VERSION" <<'PY'
-          import sys, xml.etree.ElementTree as ET
-          want = sys.argv[1]
-          ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
-          def read(path):
-              root = ET.parse(path).getroot()
-              own = root.find('m:version', ns)
-              parent = root.find('m:parent/m:version', ns)
-              return (own.text if own is not None else None,
-                      parent.text if parent is not None else None)
-          failures = []
-          own, _ = read('pom.xml')
-          if own != want:
-              failures.append(f'parent POM is {own}, expected {want}')
-          for module in ('entity-metamodel-bom', 'entity-metamodel-core', 'entity-metamodel-runtime'):
-              own, parent = read(f'{module}/pom.xml')
-              if parent != want:
-                  failures.append(f'{module} parent ref is {parent}, expected {want}')
-              if own is not None and own != want:
-                  failures.append(f'{module} declares its own version {own}')
-          own, parent = read('jpa-metadata-maven-plugin/pom.xml')
-          if own != '1.1.0-SNAPSHOT':
-              failures.append(f'plugin own version changed to {own} — it must not move on a family release')
-          if parent != want:
-              failures.append(f'plugin parent ref is {parent}, expected {want}')
-          if failures:
-              print('::error::version wiring is wrong: ' + '; '.join(failures))
-              raise SystemExit(1)
-          print(f'family at {want}; plugin still 1.1.0-SNAPSHOT parented to {want}')
-          PY
+      # Central is immutable, so anything wrong in the wiring publishes permanently.
+      - name: Verify the release wiring
+        run: ./.github/scripts/verify-release-wiring.py "$VERSION"
 
-      # -am adds the parent POM, which consumers need to resolve the modules; the plugin module
-      # is outside -pl so it cannot reach the bundle. gpg.skip is overridden here rather than
-      # flipped in the POM, so signing stays off for every other build.
-      - name: Deploy the family line to the Portal
+      # The whole reactor deploys: it is one version line, and the BOM promises every module in it,
+      # so publishing a subset would advertise coordinates that do not exist. `deploy` runs `verify`,
+      # which means the r2dbc integration suite — and its PostgreSQL container — runs here too.
+      # gpg.skip is overridden here rather than flipped in the POM, so signing stays off for every
+      # other build.
+      - name: Deploy the family to the Portal
         env:
           SONATYPE_USER: ${{ secrets.SONATYPE_USER }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
         run: |
-          mvn -B -Prelease -Dgpg.skip=false clean deploy \
-            -pl entity-metamodel-bom,entity-metamodel-core,entity-metamodel-runtime -am
+          mvn -B -Prelease -Dgpg.skip=false clean deploy
 
       - name: Collect the SBOMs
         run: |
@@ -199,14 +153,15 @@ jobs:
             $PRERELEASE
 
           for sbom in "$RUNNER_TEMP"/sbom/*; do
-            [ -e "$sbom" ] && gh release upload "v$VERSION" "$sbom"
+            [ -e "$sbom" ] || continue
+            gh release upload "v$VERSION" "$sbom"
           done
 
       - name: What happens next
         run: |
           echo "### Deployment reached VALIDATED — nothing is public yet" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Line: \`$LINE\` · version: \`$VERSION\` · dry run: \`$DRY_RUN\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Version: \`$VERSION\` · dry run: \`$DRY_RUN\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "1. Open the Central Portal deployments view and confirm the bundle is VALIDATED." >> "$GITHUB_STEP_SUMMARY"
           echo "2. Dry run: **drop** it. Real release: **publish** it — that step is irreversible." >> "$GITHUB_STEP_SUMMARY"

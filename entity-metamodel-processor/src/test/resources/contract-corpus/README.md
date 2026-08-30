@@ -19,8 +19,7 @@ contract and an AST comparison passes while they drift.
 
 These bytes are a frozen contract, not test scaffolding. A change to `expected/**` — including
 whitespace and comments — needs an approving decision on record first, and the commit message must
-name it. Same rule as the 1.x corpus under `jpa-metadata-maven-plugin/src/it/simple-consumer/expected/`;
-the procedure is `docs/runbooks/golden-corpus-update.md`.
+name it. The procedure is `docs/runbooks/golden-corpus-update.md`.
 
 Generated output must stay byte-deterministic: no dates, no environment-dependent content. The
 double-generation test in this module is what enforces it.

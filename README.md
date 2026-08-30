@@ -3,7 +3,7 @@
 Generate a metamodel from your Spring Data entities while they compile, then build R2DBC
 queries — joins included — that the compiler checks.
 
-> **Nothing is published yet.** There is no artifact on Maven Central to depend on: you build it
+> **Nothing is on Maven Central yet.** There is no artifact there to depend on: you build it
 > from source, and the public API can still change. Everything below runs today and is held by
 > tests on every build. [Where it's going](#where-its-going) has the bar for a first release.
 
@@ -204,11 +204,12 @@ PostgreSQL 16 in the integration suite:
 ## Requirements and installation
 
 - **Java 17+.** CI builds on 17, 21 and 25.
+- **Maven 3.9+** to build from source. The enforcer fails the build below it.
 - **Spring Data 4.0.x–4.1.x** (`spring-data-relational` / `spring-data-r2dbc`). Applications on the
   3.5.x line have to upgrade first.
 - **Any build that runs javac.** There is no build-tool plugin to install.
 
-Nothing is published, so install it into your local repository first:
+Nothing is on Maven Central, so install it into your local repository first:
 
 ```bash
 git clone https://github.com/VadimBabich/entity-metamodel.git
@@ -217,8 +218,7 @@ mvn -B install
 ```
 
 `mvn -B verify` additionally runs the integration tests: the query suite executes its statements
-against PostgreSQL in Testcontainers (skipped with a notice when Docker is unavailable locally),
-and the 1.x plugin generates against a sample consumer and diffs the result against its corpus.
+against PostgreSQL in Testcontainers (skipped with a notice when Docker is unavailable locally).
 
 ### Maven
 
@@ -288,83 +288,6 @@ delegated Maven or Gradle build is the reliable path today.
 | A `Pageable` sort is rejected | the sort names a property the entity does not persist | it arrives as an error signal on the publisher, not a thrown exception — map it to a bad request |
 | A `Criteria` is refused, naming a property | it used a column name; a column name can be another property's name, so resolving it would filter the wrong column | use the property name the message gives |
 
-## The 1.x Maven plugin
-
-`jpa-metadata-maven-plugin` is the previous generation: it parses entity sources with JavaParser and
-emits `User_` classes of `Column_` constants. It works, its shape is frozen by a golden corpus, and
-it is maintained through the transition and retired in stages — but it is not where new work goes.
-
-```xml
-<plugin>
-  <groupId>io.github.vadimbabich</groupId>
-  <artifactId>jpa-metadata-maven-plugin</artifactId>
-  <version>1.1.0-SNAPSHOT</version>
-  <executions>
-    <execution>
-      <goals><goal>generate-metadata</goal></goals>
-    </execution>
-  </executions>
-  <configuration>
-    <packageName>com.example.model</packageName>
-  </configuration>
-</plugin>
-```
-
-The goal binds to `generate-sources` and registers its output as a compile source root. One extra
-step: `User_.getTable()` goes through a generated accessor, which has to be a bean.
-
-```java
-@Bean
-StaticR2dbcEntityTemplateAccessor_ staticAccessor() {
-  return new StaticR2dbcEntityTemplateAccessor_();
-}
-```
-
-### Sample output
-
-```text
-Generating metadata for 'com.example.model' package with language level 'JAVA_17'
-Generated metadata for 2 entity classes into: '/target/generated-sources/metamodel'
-Included entities:
-  • User
-  • UserAttribute
-```
-
-Those three lines are format-checked against the plugin's real output by the integration test; the
-entity tree below them is illustrative.
-
-### What to know before adopting it
-
-- **Maven only**, and **source-based**: it parses `src/main/java` under one configured package, so
-  entities arriving in a jar, or in a sibling package, are invisible to it.
-- **It emits two files into Spring's own packages** (`Column_`,
-  `StaticR2dbcEntityTemplateAccessor_`), splitting those packages across artifacts and putting a
-  mutable static in the startup path. Both are frozen for compatibility; both are what the
-  processor removes.
-- **Names only.** `Criteria` takes `Object` for values, so this buys correct column *names*, not
-  checked comparisons.
-- Java 17+, Maven 3.9+, and the same Spring Data Relational annotations — not JPA.
-
-| Problem | Likely cause | Fix |
-|---|---|---|
-| Nothing generated | `packageName` does not match the entity package, or entities sit outside `sourceDirectory` | check both against the summary above |
-| Plugin not found | it is not published | `mvn install` it from source first |
-| `Column_` will not resolve | generated output is not on the compile path | reimport the Maven project; confirm the goal ran in `generate-sources` |
-| `getTable()` fails at runtime | the accessor is not a bean | register it, as above |
-| Stale metamodel after a rename | output kept from an earlier run | `mvn clean generate-sources` |
-
-## Parameters
-
-| Parameter               | Required | Default                                                | Description                                   |
-|-------------------------|----------|--------------------------------------------------------|-----------------------------------------------|
-| packageName             | ✅        | none                                                   | Root package scanned for entities.            |
-| outputDirectory         | ❌        | ${project.build.directory}/generated-sources/metamodel | Where generated sources are written.          |
-| sourceDirectory         | ❌        | src/main/java                                          | Source root to scan, relative to the project. |
-| languageLevel           | ❌        | JAVA_17                                                | Java level used to parse the sources.         |
-| entityMetadataGenerator | ❌        | r2dbc                                                  | Generator implementation; only `r2dbc` ships. |
-
-A test checks this table against the Mojo's own parameters, so it cannot drift from the code.
-
 ## Compared with the alternatives
 
 Every option here solves a real problem. The question is whose, and what it couples you to.
@@ -393,9 +316,10 @@ release will be a version you can run end to end — generate a metamodel, build
 it — rather than a milestone of parts. What stands between here and that release is freeze and
 packaging work rather than core function; API compatibility gating is the next station.
 
-The 1.x plugin is maintained through the transition and retired in stages. The two generations emit
-different shapes — that is the point — and each shape is pinned by its own committed corpus, so
-neither drifts while both exist.
+The 1.x Maven plugin that preceded this one was retired and removed from the repository on
+2026-08-30; it survives in git history and in its own tags. The generated shape it produced is not
+the shape produced now — metamodels no longer land in packages this project does not own — which was
+the point of the reboot.
 
 ## Documentation
 
@@ -405,9 +329,8 @@ neither drifts while both exist.
   anything touching the runtime.
 - [`docs/runbooks/golden-corpus-update.md`](docs/runbooks/golden-corpus-update.md) — how generated
   output is allowed to change.
-- The corpora are the most precise description of the generated shape there is:
-  `entity-metamodel-processor/src/test/resources/contract-corpus/` for 2.x,
-  `jpa-metadata-maven-plugin/src/it/simple-consumer/expected/` for 1.x.
+- The corpus is the most precise description of the generated shape there is:
+  `entity-metamodel-processor/src/test/resources/contract-corpus/`.
 
 ## Contributing
 

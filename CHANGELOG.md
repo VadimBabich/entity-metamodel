@@ -126,8 +126,17 @@ a driver row is the source, and the second needs callbacks resolved from an appl
 which this library neither registers nor holds. Logic that has to run after an entity is read
 belongs in the mapper the executor takes.
 
-Nothing is published yet. The first publication will be the version that generates *and* executes,
-rather than a milestone of parts — see [`ROADMAP.md`](ROADMAP.md).
+Nothing is on Maven Central yet. The first publication there will be the version that generates
+*and* executes, rather than a milestone of parts — see [`ROADMAP.md`](ROADMAP.md).
+
+**The 1.x Maven plugin is retired and removed.** `jpa-metadata-maven-plugin` was deprecated, then
+deleted from the repository along with its golden corpus, its integration test and its dependabot
+entry. It had no consumers: it was published to GitHub Packages at 1.0.0, never to Maven Central,
+and the owner's own services hand-wrote the capability rather than using it. The module survives in
+git history and in the `1.0.0` and `v1.1.0` tags. Its successor is the annotation processor,
+declared in maven-compiler-plugin's `annotationProcessorPaths`; the parameters do not map across one
+for one — discovery becomes annotation-driven, output and source roots and language level become
+compiler settings, and the generator-selection parameter has no successor.
 
 ## 1.1.0 — 2026-08-15
 
