@@ -10,7 +10,7 @@ Rules derived from a study of production Spring Data R2DBC services, i.e. from h
 actually consumed — not from preference. Where a rule reverses common practice, the reason is stated.
 
 **Applies to:** `entity-metamodel-runtime`, `entity-metamodel-runtime-r2dbc`, every reactive line the
-processor emits, and their tests. The 1.x Maven plugin is not reactive and is out of scope.
+processor emits, and their tests.
 
 **Two audiences, one rule set.** A rule tagged **[L]** binds *library* code — ours, hand-written or
 generated, running inside somebody else's application. A rule tagged **[C]** is what we teach

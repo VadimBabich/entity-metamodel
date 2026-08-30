@@ -14,9 +14,8 @@
   <name>Entity Metamodel (BOM)</name>
   <description>
     Dependency management for the entity-metamodel family — one version for every artifact in
-    one aligned family, born at 2.0.0-M1. Lists only artifacts that exist;
-    annotations and runtime-r2dbc join as they land. The retiring 1.x plugin keeps
-    its own version line and is deliberately not part of this BOM.
+    one aligned family. Lists only artifacts that exist; the annotations artifact joins when it
+    lands.
   </description>
 
   <dependencyManagement>

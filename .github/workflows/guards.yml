@@ -74,3 +74,15 @@ jobs:
           fi
 
           echo "clean — no private paths tracked"
+
+  release-wiring:
+    name: Release-wiring guard still works
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The guard itself runs only on a release dispatch, which may be months away, so nothing
+      # would notice a refactor that disarmed it until the one run where it is load-bearing.
+      # They exercise it against synthetic reactors rather than this one, because a healthy
+      # reactor cannot produce the failures the guard exists to catch.
+      - name: Run the release-wiring controls
+        run: ./.github/scripts/verify-release-wiring-controls.sh

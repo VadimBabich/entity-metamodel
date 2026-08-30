@@ -4,9 +4,10 @@ As of 2026-08-30. Updated when direction changes, reviewed at least once per rel
 
 ## Where the project is
 
-The shipping artifact is the 1.x Maven plugin: it parses Spring Data Relational entity sources
-and generates static metamodel classes for type-safe query construction with Spring Data R2DBC.
-Version 1.0.0 is abandoned; the 1.1.x line is current.
+Nothing is shipping. The 2.x family — annotation processor, runtime library, query runtime and a
+BOM — is built and unpublished. The 1.x Maven plugin that preceded it, which parsed entity sources
+with JavaParser, was retired and **removed from the repository on 2026-08-30**; it survives in git
+history and in its own tags.
 
 ## Where it is going
 
@@ -23,12 +24,11 @@ release is freeze and packaging work, not core function:
   executing against a real PostgreSQL in its integration suite.*
 - **BOM** — one aligned version for the whole family. *Built.*
 
-Nothing is published yet, deliberately: the first release to Maven Central will be a version that
+Nothing is on Maven Central yet, deliberately: the first release there will be a version that
 runs end to end — generate a metamodel, build a query, execute it — not a milestone of parts
-nobody can use. The 1.x plugin is maintained
-through the transition and retired in stages. The two generations emit different shapes — 1.x still
-emits into Spring's own packages, which is the defect 2.x removes — and each shape is pinned by its
-own committed corpus of golden files, so neither can drift while the transition runs.
+nobody can use. The 1.x plugin has been removed. It emitted into Spring's own packages, which is the defect 2.x
+exists to remove; the surviving shape is pinned by a committed corpus of golden files so it cannot
+drift.
 
 ## What guides the order
 

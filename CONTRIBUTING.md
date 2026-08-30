@@ -9,18 +9,18 @@ the notes below keep contributions predictable for both sides.
 mvn -B verify
 ```
 
-That runs the unit tests plus the integration test, which generates code against a sample
-project and byte-compares it with the committed golden corpus
-(`jpa-metadata-maven-plugin/src/it/simple-consumer/expected/`). CI builds on JDK 17, 21 and 25;
-the source level is Java 17.
+That runs the unit tests plus the integration tests: the query suite executes against PostgreSQL
+in Testcontainers, and the parity test byte-compares the processor's output with the committed
+golden corpus (`entity-metamodel-processor/src/test/resources/contract-corpus/expected/`). CI builds
+on JDK 17, 21 and 25; the source level is Java 17.
 
 Two things reviewers will hold your PR to:
 
 - **Golden corpus changes are deliberate.** Any diff under
-  `jpa-metadata-maven-plugin/src/it/simple-consumer/expected/`
-  changes the plugin's output contract and needs an explicit rationale in the PR description.
+  `entity-metamodel-processor/src/test/resources/contract-corpus/expected/`
+  changes the generated output contract and needs an explicit rationale in the PR description.
 - **Reproducible output.** Generated code must stay byte-deterministic — no timestamps, no
-  environment-dependent content. `GenerationReproducibilityTest` enforces this.
+  environment-dependent content; the processor's double-generation test enforces this.
 
 ## Filing issues
 

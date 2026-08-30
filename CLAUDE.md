@@ -4,10 +4,11 @@ Committed and public. Never add private-material paths, production-system identi
 quotes from third-party source held under licence. Maintainer-local rules — including the map
 of private design records — live in the uncommitted `CLAUDE.local.md`.
 
-**This repository:** the shipping 1.x `jpa-metadata-maven-plugin` (JavaParser-based Maven Mojo
-generating entity metamodels for Spring Data R2DBC), plus the paper design program for its v2
-reboot as a JSR-269 annotation processor with an owned runtime library. The v2 design is
-recorded privately; read it before writing any v2 code.
+**This repository:** the `entity-metamodel` family — a JSR-269 annotation processor generating
+entity metamodels for Spring Data R2DBC, with an owned runtime library — built and not yet
+published. The 1.x `jpa-metadata-maven-plugin` it replaced (a JavaParser-based Maven Mojo) was
+retired and removed on 2026-08-30 and lives only in git history. The design is recorded privately;
+read it before writing code.
 
 ## Hard rails — violations are one-way doors
 
@@ -18,12 +19,13 @@ recorded privately; read it before writing any v2 code.
 2. **Never `git add .` or `git add -A`.** Stage explicit paths only.
 3. **Push only via the SSH alias `github.com-vadimbabich`** (account isolation). Never point
    `origin` at a plain `github.com` URL.
-4. **Golden corpus** (`jpa-metadata-maven-plugin/src/it/simple-consumer/expected/**`): any
-   change — including formatting and comments — requires an approving decision record that
+4. **Golden corpus** (`entity-metamodel-processor/src/test/resources/contract-corpus/expected/**`):
+   any change — including formatting and comments — requires an approving decision record that
    already exists and is **named in the commit message**, since those records are not
    committed and cannot ride the same diff. Generated output must stay byte-deterministic: no
    dates, no environment-dependent content. Procedure:
-   `docs/runbooks/golden-corpus-update.md`.
+   `docs/runbooks/golden-corpus-update.md`. (The 1.x corpus this rail used to name was deleted with
+   its module on 2026-08-30; the rail transferred to the shape that is still frozen.)
 5. **Quantities derived from private evidence keep their provenance marker** (`[review-time]` =
    provisional, or attested). Never restate them as verified facts, and never reproduce the
    evidence itself.
@@ -59,11 +61,11 @@ correct side, and keep committed files free of references to the private side.
   not general advice.
 - `CLAUDE.local.md` (uncommitted) — where the private records live and what they decide.
 
-## Current state (2026-08-29)
+## Current state (2026-08-30)
 
-- Shipping: the 1.x Mojo at `1.1.0-SNAPSHOT`; `master` is pushed to `origin`. Its code lives in
-  `jpa-metadata-maven-plugin/src/main/java/io/github/vadimbabich/metadata/`: `parser/`
-  (JavaParser) → `graph/` → `generator/` (JavaPoet), behind `api/`.
+- The 1.x JavaParser Mojo was retired and **removed from the repository on 2026-08-30** under an
+  approving decision record named in that commit's message. It survives in git history and in the
+  `1.0.0` and `v1.1.0` tags only. Nothing is shipping: the v2 family is built and unpublished.
 - All five v2 modules exist at `2.0.0-SNAPSHOT` and build green in the reactor:
   `entity-metamodel-core`, `entity-metamodel-runtime`, `entity-metamodel-processor`,
   `entity-metamodel-runtime-r2dbc` and the `entity-metamodel-bom`. The processor generates the
@@ -82,12 +84,10 @@ correct side, and keep committed files free of references to the private side.
 
 - Work on `master` through short-lived `feature/YYYY.MM_short-desc` branches. Commit or push
   only when asked.
-- **No long-lived `2.x` or `develop` branch.** v2 ships as milestones cut from `master`
-  (`2.0.0-M1` → `-RC1` → `2.0.0`). A version branch
-  is unworkable here: 1.x's remaining releases depend on v2 artifacts — runtime/core publishes
-  at `2.0.0-M1` before the 1.x release that consumes it — and the golden corpus is the shared
-  1.x⇄v2 parity contract.
-- `release/2.0.x` or `1.1.x` branches on demand only, cut from a tag, then deleted.
+- **No long-lived `2.x` or `develop` branch.** There is one line to release. The `2.0.0-M1`
+  milestone was cancelled on 2026-08-22, so the first published version is `2.0.0-RC1` or `2.0.0`
+  directly, cut from `master`.
+- `release/2.0.x` branches on demand only, cut from a tag, then deleted.
 - Releases are dispatch-triggered (`.github/workflows/release.yml`); milestones and RCs take the
   same path. Tag as `v<version>`, matching `v1.1.0` — the unprefixed `1.0.0` is a known
   inconsistency; do not add more.
@@ -96,8 +96,8 @@ correct side, and keep committed files free of references to the private side.
   cut would publish an unresolvable parent, since every module parents to `2.0.0-SNAPSHOT`.
 - The dispatch is gated on `master`, so a dry run must be triggered there, not from a branch.
 - **The repository is `entity-metamodel`** (renamed 2026-08-21). Never create a repository under
-  the old name — that silently kills GitHub's redirects. Published coordinates are unchanged: the
-  retiring 1.x artifact keeps `jpa-metadata-maven-plugin`, which is also its module directory.
+  the old name — that silently kills GitHub's redirects. The `jpa-metadata-maven-plugin` coordinate
+  it was named after belongs to the retired 1.x artifact and is not reused.
 
 ## Code style
 
@@ -110,8 +110,7 @@ Optimize for scanning, not compactness.
 - Blank lines between logical steps. One responsibility per method, no boolean flag parameters.
 - Names carry domain meaning (`normalizedKey`, `persistedEntity`), never `data`, `value`, `obj`,
   `result`. Never return `null`; prefer immutable collections and `List.of()`/`Map.of()`.
-- Constructor injection, never field injection — except Mojo `@Parameter` fields, which Maven
-  injects by design.
+- Constructor injection, never field injection.
 - `src/main/java` declares explicit types today (no `var`). Match the file you are editing
   rather than introducing a second style.
 
@@ -153,9 +152,8 @@ by exactly that kind of tidy-up.
 
 **Per file type:**
 
-- **Java** — JavaDoc on public API only. Carve-out: JavaDoc on Mojo `@Parameter` fields is
-  harvested into `plugin.xml` and *is* the `mvn help:describe` and site documentation — keep it,
-  however obvious it looks. Editing `FILE_HEADER` changes generated output, so rail 4 applies.
+- **Java** — JavaDoc on public API only. Editing the generated-file header constant in
+  `MetamodelWriter` changes generated output, so rail 4 applies.
 - **Shell** — see `docs/shell-code-style.md`. `|| true` and any other tolerated failure needs its
   reason stated at the call site.
 - **Workflow YAML** — the step's `name:` is the description; comment only why a step exists, why a
@@ -172,18 +170,17 @@ private record, in a comment or anywhere else (rail 1). Committed comments must 
 Compiles at release 17 (`<java.release>`, enforcer floor `[17,)`) — write Java 17, not 21. CI
 runs `mvn -B verify` on JDK 17, 21 and 25.
 
-`mvn -B verify` runs the unit tests plus the invoker IT, which generates against
-`jpa-metadata-maven-plugin/src/it/simple-consumer` and byte-compares the golden corpus. Tests
-are JUnit 5 + AssertJ + Mockito over fixtures in
-`jpa-metadata-maven-plugin/src/test/resources/projects/simple-project`;
-`GenerationReproducibilityTest` generates twice and asserts byte-identical, date-free output —
-extend it when generator output changes.
+`mvn -B verify` runs the unit tests plus the r2dbc integration suite, which executes against a real
+PostgreSQL in Testcontainers. `ContractCorpusParityTest` compiles the contract corpus's sources and
+byte-compares the processor's output against
+`entity-metamodel-processor/src/test/resources/contract-corpus/expected/`. Tests are JUnit 5 +
+AssertJ + Mockito; extend the parity test when generated output changes.
 
 1. Run IDE inspections on every file you changed (`mcp__idea__get_file_problems`, or
    `mcp__idea__lint_files` for a batch). Fix all errors, and all warnings unless you can state
    why the warning is wrong. Fix the cause — no `@SuppressWarnings` or other silencing.
 2. Reformat only files you touched (`mcp__idea__reformat_file`); never bulk-reformat, and never
-   reformat `src/it/**/expected/**` or generated sources (rail 4). Style is `.editorconfig`;
+   reformat `**/contract-corpus/expected/**` or generated sources (rail 4). Style is `.editorconfig`;
    change it deliberately, never as a side effect.
 3. `mvn -B verify` must pass.
 4. If you touched a shell script or a workflow `run:` block: `shellcheck -S style` must pass, and

@@ -38,6 +38,12 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+### Bytecode from the Python guards under .github/scripts/. Running one locally writes it beside
+### the script, where an explicit `git add .github/scripts/` would sweep it in.
+__pycache__/
+*.pyc
+
 ### Private working material, including third-party source held under licence. Publishing any
 ### of it is a separate, unresolved decision. Do not remove this entry.
 _doc/

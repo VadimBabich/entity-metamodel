@@ -15,11 +15,16 @@ Honest status, so expectations are right:
 | Version | Status |
 |---|---|
 | 1.0.0 | Abandoned — do not use; it will not receive fixes. |
-| 1.1.x | Current line — fixes land here until the 2.0 reboot ships. |
-| 2.0.0 (planned) | In design; a reboot of the generation pipeline. Not released. |
+| 1.x | Retired and removed from the repository. No fixes. |
+| 2.0.0 (planned) | Built, not released. Fixes will land here once it ships. |
 
 ## Scope notes
 
-The plugin runs at build time and parses Java source files; it performs no network I/O and
-executes none of the code it parses. Reports about the build-time parsing path (e.g. crafted
-source files causing pathological behavior) are in scope.
+The annotation processor runs at build time: it reads Java sources, executes none of the code it
+reads, and performs no network I/O. Reports about that path (e.g.
+crafted sources causing pathological behavior) are in scope.
+
+The runtime artifacts run inside the consumer's application. `entity-metamodel-runtime-r2dbc`
+builds SQL from metamodel references and executes it against the consumer's database, so reports
+about generated SQL — including the `RawSql`/`SqlExpr` escape hatch — are in scope. Database
+credentials, connection management and the database itself belong to the consumer.
