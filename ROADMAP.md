@@ -1,6 +1,6 @@
 # Roadmap
 
-As of 2026-08-27. Updated when direction changes, reviewed at least once per release cycle.
+As of 2026-08-30. Updated when direction changes, reviewed at least once per release cycle.
 
 ## Where the project is
 

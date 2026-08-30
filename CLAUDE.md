@@ -59,17 +59,22 @@ correct side, and keep committed files free of references to the private side.
   not general advice.
 - `CLAUDE.local.md` (uncommitted) — where the private records live and what they decide.
 
-## Current state (2026-08-21)
+## Current state (2026-08-29)
 
 - Shipping: the 1.x Mojo at `1.1.0-SNAPSHOT`; `master` is pushed to `origin`. Its code lives in
   `jpa-metadata-maven-plugin/src/main/java/io/github/vadimbabich/metadata/`: `parser/`
   (JavaParser) → `graph/` → `generator/` (JavaPoet), behind `api/`.
-- `entity-metamodel-core` and `entity-metamodel-runtime` exist at `2.0.0-SNAPSHOT`; the
-  annotation processor, the r2dbc execution module and the fluent query API do not.
-- **The v2 decisions are proposals, not settled.** Several would revise things the design paper
-  states as decided. Do not pre-apply a proposal to committed artifacts. Concretely: `pom.xml`
-  enforces Maven `[3.9,)` while a pending decision proposes lowering it to 3.6.3 — leave the
-  POM alone until that is resolved.
+- All five v2 modules exist at `2.0.0-SNAPSHOT` and build green in the reactor:
+  `entity-metamodel-core`, `entity-metamodel-runtime`, `entity-metamodel-processor`,
+  `entity-metamodel-runtime-r2dbc` and the `entity-metamodel-bom`. The processor generates the
+  frozen shape; the r2dbc module carries the fluent query surface and executes it against a real
+  PostgreSQL in its integration suite.
+- **Most v2 decisions are now settled; a few are still open.** Where a decision record has been
+  ratified it outranks the design paper, and contradicting it requires new evidence rather than
+  preference. Still open — do not pre-apply: `pom.xml` enforces Maven `[3.9,)` while a pending
+  decision proposes lowering it to 3.6.3, so leave the POM alone until that is resolved.
+- The API is not frozen yet: compatibility gating is the next station, so public signatures in the
+  v2 modules can still change.
 - Publication is gated: nothing in the family has been released, and the release workflow
   refuses by design (see below).
 
