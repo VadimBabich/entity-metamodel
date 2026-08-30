@@ -76,7 +76,7 @@
          failure it would buy is a linkage error at runtime rather than a broken build. Reactor is
          pinned to the version spring-data-r2dbc itself declares, so the direct and transitive
          views agree. -->
-    <spring-data.version>4.1.0</spring-data.version>
+    <spring-data.version>4.1.1</spring-data.version>
     <spring-r2dbc.version>7.0.8</spring-r2dbc.version>
     <reactor.version>3.8.6</reactor.version>
 
