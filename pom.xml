@@ -78,7 +78,7 @@
          views agree. -->
     <spring-data.version>4.1.1</spring-data.version>
     <spring-r2dbc.version>7.0.9</spring-r2dbc.version>
-    <reactor.version>3.8.6</reactor.version>
+    <reactor.version>3.8.7</reactor.version>
 
     <!-- Execution-layer test substrate only: Testcontainers PostgreSQL on the 2.x coordinates,
          driven through r2dbc-postgresql. Never compile-scope. -->
