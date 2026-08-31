@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".github/scripts/branch-ready.sh || exit 2",
+            "if": "Bash(git commit*)",
+            "timeout": 60,
+            "statusMessage": "Checking branch readiness"
+          }
+        ]
+      }
+    ]
+  }
+}

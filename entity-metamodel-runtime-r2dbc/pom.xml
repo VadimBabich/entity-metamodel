@@ -20,11 +20,16 @@
 
   <dependencyManagement>
     <dependencies>
-      <!-- The r2dbc-postgresql test driver drags reactor-netty's netty 4.1.112, which carries
-           several published advisories. Test scope never reaches a consumer, but leaving known-
-           vulnerable jars on any classpath means every scanner run has to re-triage them. Pinned
-           within the binary-compatible 4.1 line. A leaf module's dependencyManagement is not
-           inherited by consumers of its artifact, so this stays local. -->
+      <!-- The r2dbc-postgresql test driver pulls reactor-netty-core 1.1.22, which declares netty
+           4.1.112 — a version carrying published advisories. Test scope reaches no consumer, but
+           known-vulnerable jars on any classpath mean re-triaging them on every scanner run, so
+           netty is pinned forward to the newest 4.1 patch.
+           **Forward within 4.1, never across the minor.** netty patches both lines for the same
+           advisories, so 4.2 buys no fix; reactor-netty did not support 4.2 before its own 1.3.x
+           line, so 4.2 under 1.1.22 is a combination its authors do not ship, and it also splits
+           netty-codec into artifacts 4.1 does not have. Dependabot is capped below 4.2 for the
+           same reason. A leaf module's dependencyManagement is not inherited by consumers of its
+           artifact, so this stays local. -->
       <dependency>
         <groupId>io.netty</groupId>
         <artifactId>netty-bom</artifactId>
@@ -36,24 +41,23 @@
   </dependencyManagement>
 
   <dependencies>
-    <!-- Resolution core sits in the relational module; this module adds r2dbc execution. -->
     <dependency>
       <groupId>io.github.vadimbabich</groupId>
       <artifactId>entity-metamodel-runtime</artifactId>
       <version>${project.version}</version>
     </dependency>
 
-    <!-- The execution substrate. Declared with an explicit version rather than through a
-         Spring Boot BOM import: Boot's train pins Spring Data to its own line, which silently
-         resolved below the 4.0.x floor this module supports. -->
+    <!-- The execution substrate, declared with an explicit version rather than through a Spring
+         Boot BOM import: Boot's train pins Spring Data to its own line, which silently resolved
+         below the 4.0.x floor this module supports. -->
     <dependency>
       <groupId>org.springframework.data</groupId>
       <artifactId>spring-data-r2dbc</artifactId>
       <version>${spring-data.version}</version>
     </dependency>
 
-    <!-- Declared directly because DatabaseClient appears in this module's own public signatures and
-         its bind-marker types carry every value it renders. It resolves transitively through
+    <!-- Declared directly because DatabaseClient appears in this module's own public signatures
+         and its bind-marker types carry every value it renders. It resolves transitively through
          spring-data-r2dbc, so the version moves with that line rather than independently. -->
     <dependency>
       <groupId>org.springframework</groupId>
@@ -61,9 +65,9 @@
       <version>${spring-r2dbc.version}</version>
     </dependency>
 
-    <!-- Declared directly because Page/Pageable appear in this module's own public signatures. It
-         resolves transitively through spring-data-r2dbc anyway, so the version must move with that
-         line: the three artifacts ship as one release train and mixing them is unsupported. -->
+    <!-- Declared directly because Page/Pageable appear in this module's own public signatures.
+         The version must move with spring-data-r2dbc: the three artifacts ship as one release
+         train and mixing them is unsupported. -->
     <dependency>
       <groupId>org.springframework.data</groupId>
       <artifactId>spring-data-commons</artifactId>
@@ -99,7 +103,7 @@
     </dependency>
 
     <!-- Execution layer only: the *IT suite runs statements against a real PostgreSQL, because
-         rendering can be proved on paper and executing cannot. Never compile-scope. -->
+         rendering can be proved on paper and execution cannot. Never compile-scope. -->
     <dependency>
       <groupId>org.testcontainers</groupId>
       <artifactId>testcontainers-postgresql</artifactId>
@@ -113,29 +117,22 @@
       <version>${r2dbc-postgresql.version}</version>
       <scope>test</scope>
     </dependency>
+
+    <!-- The *IT suite has to assert which statements were executed and, above all, which were
+         not: the count a slice avoids leaves no other trace. The R2DBC project's own listener SPI,
+         observing executions rather than statement creation. -->
+    <dependency>
+      <groupId>io.r2dbc</groupId>
+      <artifactId>r2dbc-proxy</artifactId>
+      <version>${r2dbc-proxy.version}</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
     <plugins>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-compiler-plugin</artifactId>
-        <configuration>
-          <release>${java.release}</release>
-          <compilerArgs>
-            <arg>-Xlint:all</arg>
-          </compilerArgs>
-          <failOnWarning>true</failOnWarning>
-        </configuration>
-      </plugin>
-
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-surefire-plugin</artifactId>
-      </plugin>
-
-      <!-- Container-backed tests are *IT and run under failsafe, so `mvn test` stays hermetic and
-           needs no Docker while `mvn verify` proves execution against a real database. -->
+      <!-- Container-backed tests are *IT and run under failsafe, so `mvn test` stays hermetic
+           and needs no Docker while `mvn verify` proves execution against a real database. -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-failsafe-plugin</artifactId>
@@ -155,7 +152,6 @@
         <configuration>
           <archive>
             <manifestEntries>
-              <!-- JPMS posture: stable automatic module name. -->
               <Automatic-Module-Name>io.github.vadimbabich.entitymetamodel.runtime.r2dbc</Automatic-Module-Name>
             </manifestEntries>
           </archive>

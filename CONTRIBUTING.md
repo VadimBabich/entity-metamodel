@@ -10,8 +10,9 @@ mvn -B verify
 ```
 
 That runs the unit tests plus the integration tests: the query suite executes against PostgreSQL
-in Testcontainers, and the parity test byte-compares the processor's output with the committed
-golden corpus (`entity-metamodel-processor/src/test/resources/contract-corpus/expected/`). CI builds
+in Testcontainers, the parity test byte-compares the processor's output with the committed
+golden corpus (`entity-metamodel-processor/src/test/resources/contract-corpus/expected/`), and the
+BOM's own tests check that it manages exactly the artifacts the reactor publishes. CI builds
 on JDK 17, 21 and 25; the source level is Java 17.
 
 Two things reviewers will hold your PR to:

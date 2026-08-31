@@ -1,17 +1,21 @@
 name: Release
 
 # maven-release-plugin is not used: it commits the release version and pushes a tag, and this
-# project never commits a release version — the parent POM's own description states the rule. So the
-# version is set ephemerally here and the tag is created server-side on the checked-out commit.
+# project never commits a release version. The version is set ephemerally here and the tag is
+# created server-side on the checked-out commit.
 #
-# autoPublish=false / waitUntil=validated: a run leaves a VALIDATED deployment and publishes
-# nothing. Publishing is a separate, irreversible act — Central artifacts cannot be edited.
+# autoPublish=false / waitUntil=validated leaves every run at VALIDATED and publishes nothing:
+# publishing is irreversible, because Central artifacts cannot be edited.
+#
+# Three jobs, not one: the deploy runs third-party plugin code and the whole test suite, so it must
+# not hold a token that can write to the repository. Every step after it is idempotent, so
+# re-dispatching the same version completes a half-finished release.
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release, e.g. 2.0.0-M1 (no leading v)'
+        description: 'Version to release, e.g. 2.0.0-RC1 (no leading v)'
         required: true
         type: string
       dry_run:
@@ -20,28 +24,42 @@ on:
         type: boolean
         default: true
 
-# `gh release create` needs write; nothing else in this job does.
 permissions:
-  contents: write
+  contents: read
+
+# One release at a time, and never cancel one in flight: the deploy reaches Central.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 defaults:
   run:
     shell: bash
 
 jobs:
-  release:
-    if: github.ref == 'refs/heads/master'
+  preflight:
+    name: Preflight
     runs-on: ubuntu-latest
-    # Repository-level secrets resolve here too, so protection rules can be added later
-    # without touching this file.
-    environment: release
+    permissions:
+      contents: read
 
     env:
       VERSION: ${{ inputs.version }}
-      DRY_RUN: ${{ inputs.dry_run }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A step, not a job-level `if:`. A skipped job reports the whole run as successful, which is
+      # the worst possible signal for an operation this hard to undo.
+      - name: Refuse a dispatch from outside master
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/master" ]; then
+            echo "::error::Releases are cut from master; this dispatch came from $GITHUB_REF."\
+                 "Re-dispatch with master selected."
+            exit 1
+          fi
 
       # This repo has shipped a release without the license text once.
       - name: Require LICENSE in the checkout
@@ -54,11 +72,71 @@ jobs:
                  "X.Y.Z-RC<n>, with no leading 'v' (the tag gets the prefix, the version does not)."
             exit 1
           fi
-          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
-            echo "::error::Tag v$VERSION already exists. Versions are never reused —"\
-                 "Central is immutable, so a re-release must carry a higher version."
+
+      # A tag on this same commit means an earlier run got past the deploy, so this dispatch is a
+      # resumption the idempotent publish steps will finish. A tag on any other commit is a
+      # different release, and Central is immutable.
+      #
+      # Peeled ref first, plain ref as fallback: an annotated tag's plain ref names the tag object
+      # and could never match a commit, while a lightweight tag advertises no peeled ref at all.
+      # This repository has annotated tags and this workflow creates lightweight ones, so both
+      # cases are live. ls-remote runs unauthenticated — the checkout above drops credentials —
+      # which works because the repository is public.
+      - name: Reject a version already tagged elsewhere
+        run: |
+          if ! peeled_tag_ref="$(git ls-remote origin "refs/tags/v$VERSION^{}")"; then
+            echo "::error::Cannot reach origin to check whether tag v$VERSION exists."
             exit 1
           fi
+
+          existing_tag_sha="$(printf '%s\n' "$peeled_tag_ref" | head -1 | cut -f1)"
+
+          if [ -z "$existing_tag_sha" ]; then
+            if ! plain_tag_ref="$(git ls-remote origin "refs/tags/v$VERSION")"; then
+              echo "::error::Cannot reach origin to check whether tag v$VERSION exists."
+              exit 1
+            fi
+
+            existing_tag_sha="$(printf '%s\n' "$plain_tag_ref" | head -1 | cut -f1)"
+          fi
+
+          if [ -z "$existing_tag_sha" ]; then
+            echo "v$VERSION is not tagged yet — this is a first attempt."
+            exit 0
+          fi
+
+          if [ "$existing_tag_sha" != "$GITHUB_SHA" ]; then
+            echo "::error::Tag v$VERSION already exists on commit $existing_tag_sha, not on this"\
+                 "one. Versions are never reused — Central is immutable, so a re-release must"\
+                 "carry a higher version."
+            exit 1
+          fi
+
+          echo "v$VERSION already tags this commit — treating this run as a resumption."
+
+  deploy:
+    name: Deploy to the Central Portal
+    needs: preflight
+    runs-on: ubuntu-latest
+    # Repository-level secrets resolve here too, so protection rules can be added later without
+    # touching this file. Only this job sees them.
+    environment: release
+    permissions:
+      contents: read
+      # Both are for actions/attest-build-provenance: OIDC to prove which workflow ran, and
+      # write access to record the attestation.
+      id-token: write
+      attestations: write
+
+    env:
+      VERSION: ${{ inputs.version }}
+      DRY_RUN: ${{ inputs.dry_run }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing in the deploy needs a credential for this repository.
+          persist-credentials: false
 
       - name: Require the publishing credentials
         env:
@@ -93,7 +171,7 @@ jobs:
           # maven-gpg-plugin's default passphraseEnvName — no custom plumbing.
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
-      # HEAD's commit time, not "now", so re-running on the same commit stays byte-identical.
+      # HEAD's commit time, not "now", so a re-run on the same commit stays byte-identical.
       # Stamped into the POMs so the published POM carries it, not just this build.
       - name: Stamp the reproducible-build timestamp
         run: |
@@ -104,65 +182,198 @@ jobs:
             -DnewVersion="$STAMP" \
             -DgenerateBackupPoms=false
 
-          grep -q "<project.build.outputTimestamp>$STAMP<" pom.xml
+          if ! grep -q "<project.build.outputTimestamp>$STAMP<" pom.xml; then
+            echo "::error::The timestamp did not land in pom.xml, so the published POMs would"\
+                 "carry the committed placeholder and the build would not be reproducible from"\
+                 "this commit. Check whether the property was renamed or moved."
+            exit 1
+          fi
 
-      # Never committed or pushed; the edited tree dies with the runner.
+      # Never committed or pushed; the edited tree dies with the runner. Consequence: a checkout of
+      # the tag still reads 2.0.0-SNAPSHOT, so reproducing a release from its tag means passing
+      # -DnewVersion=<the tag name without the v>.
       - name: Set the family version ephemerally
         run: |
           mvn -B -q org.codehaus.mojo:versions-maven-plugin:2.21.0:set \
             -DnewVersion="$VERSION" -DgenerateBackupPoms=false
 
-      # Central is immutable, so anything wrong in the wiring publishes permanently.
-      - name: Verify the release wiring
-        run: ./.github/scripts/verify-release-wiring.py "$VERSION"
-
-      # The whole reactor deploys: it is one version line, and the BOM promises every module in it,
-      # so publishing a subset would advertise coordinates that do not exist. `deploy` runs `verify`,
-      # which means the r2dbc integration suite — and its PostgreSQL container — runs here too.
-      # gpg.skip is overridden here rather than flipped in the POM, so signing stays off for every
-      # other build.
+      # The whole reactor deploys: it is one version line and the BOM promises every module in it,
+      # so publishing a subset would advertise coordinates that do not exist. `deploy` runs
+      # `verify`, so the r2dbc integration suite — PostgreSQL container included — and the BOM's
+      # reactor-wiring tests run here too.
+      #
+      # expected.release.version makes the stamp above verifiable: the release profile enforces it
+      # in every module and has no default, so omitting it fails the build rather than deploying
+      # whatever version the tree happens to carry. gpg.skip is overridden here rather than flipped
+      # in the POM, so signing stays off for every other build.
       - name: Deploy the family to the Portal
         env:
           SONATYPE_USER: ${{ secrets.SONATYPE_USER }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
         run: |
-          mvn -B -Prelease -Dgpg.skip=false clean deploy
+          mvn -B -Prelease -Dgpg.skip=false -Dexpected.release.version="$VERSION" clean deploy
 
       - name: Collect the SBOMs
         run: |
           mkdir -p "$RUNNER_TEMP/sbom"
-          find . -path '*/target/*.json' -name '*-bom.json' -exec cp {} "$RUNNER_TEMP/sbom/" \; || true
-          ls -1 "$RUNNER_TEMP/sbom" || echo "(no SBOM found — cyclonedx output moved?)"
+          find . -path '*/target/*.json' -name '*-bom.json' -exec cp {} "$RUNNER_TEMP/sbom/" \;
 
-      - name: Tag and publish the GitHub release
-        if: inputs.dry_run == false
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          PRERELEASE=""
-          case "$VERSION" in
-            *-M*|*-RC*) PRERELEASE="--prerelease" ;;
-          esac
+          collected="$(ls -1 "$RUNNER_TEMP/sbom")"
 
-          # --target creates the tag server-side, so this job never pushes to master.
-          gh release create "v$VERSION" \
-            --target "$GITHUB_SHA" \
-            --title "v$VERSION" \
-            --notes "Family line $VERSION. The artifacts sit on the Central Portal in VALIDATED state until explicitly published." \
-            $PRERELEASE
+          if [ -z "$collected" ]; then
+            echo "::error::No CycloneDX SBOM was produced. The release profile binds makeBom to"\
+                 "package, so either that binding is gone or its output moved — do not ship a"\
+                 "release without one."
+            exit 1
+          fi
 
-          for sbom in "$RUNNER_TEMP"/sbom/*; do
-            [ -e "$sbom" ] || continue
-            gh release upload "v$VERSION" "$sbom"
-          done
+          printf '%s\n' "$collected"
+
+      # A signed in-toto statement binding these bytes to this workflow run and commit, verifiable
+      # with `gh attestation verify`. A GPG signature proves who signed, not what built it.
+      - name: Attest the built artifacts
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: '*/target/*.jar'
+
+      - name: Hand the SBOMs to the publish job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sboms
+          path: ${{ runner.temp }}/sbom
+          if-no-files-found: error
+          retention-days: 7
 
       - name: What happens next
         run: |
-          echo "### Deployment reached VALIDATED — nothing is public yet" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Version: \`$VERSION\` · dry run: \`$DRY_RUN\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "1. Open the Central Portal deployments view and confirm the bundle is VALIDATED." >> "$GITHUB_STEP_SUMMARY"
-          echo "2. Dry run: **drop** it. Real release: **publish** it — that step is irreversible." >> "$GITHUB_STEP_SUMMARY"
-          echo "3. Then work the post-release checklist (changelog heading, README pin, roadmap date)." >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### Deployment reached VALIDATED — nothing is public yet"
+            echo ""
+            echo "Version: \`$VERSION\` · dry run: \`$DRY_RUN\`"
+            echo ""
+            echo "1. Open the Central Portal deployments view and confirm the bundle is VALIDATED."
+            echo "2. Dry run: **drop** it. Real release: **publish** it — that step is irreversible."
+            echo "3. Then work the post-release checklist (changelog heading, README pin, roadmap date)."
+            echo ""
+            echo "If a later step failed, re-dispatch the same version: every step after the deploy"
+            echo "is re-runnable. If Central has already **published** it, the duplicate deploy will"
+            echo "be rejected — finish the GitHub release by hand in that case."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Everything a dry run can exercise without writing anything. It exists because a dry run stops
+  # before publish-release, so that job's wiring had never executed and, gated at job level, never
+  # could. This runs on every dispatch and proves the two things that can fail there without
+  # mutating: the artifact handoff, and the token and repository wiring `gh` needs. Only
+  # `gh release create` and `gh release upload` stay untestable, which is why both are idempotent.
+  #
+  # The upload above is v7 and this download is v8, deliberately: v8's breaking changes are a
+  # Content-Type check before unzipping — which affects only upload's unused unzipped mode — and a
+  # digest mismatch becoming an error, which is the behaviour worth having here. Aligning the
+  # majors would guard today's pairing; being exercised by every dry run guards every future one.
+  verify-handoff:
+    name: Verify the publish inputs
+    needs: deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+
+    steps:
+      - name: Take the SBOMs from the deploy job
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sboms
+          path: sbom
+
+      - name: Confirm the handoff arrived and the release API answers
+        run: |
+          # Absent and empty are different failures: without the first branch, `ls` on a missing
+          # directory aborts the step under `set -e` before anything below can explain why.
+          if [ ! -d sbom ]; then
+            echo "::error::No 'sbom' directory after the download, so the artifact did not arrive"\
+                 "at all. The upload and download actions are pinned at different majors on"\
+                 "purpose — check whether a bump moved either of them."
+            exit 1
+          fi
+
+          collected="$(ls -1 sbom)"
+
+          if [ -z "$collected" ]; then
+            echo "::error::The SBOM artifact arrived empty. The deploy job uploads it with"\
+                 "if-no-files-found: error, so an empty download means the two actions wrote and"\
+                 "read different things."
+            exit 1
+          fi
+
+          printf '%s\n' "$collected"
+
+          # A read-only call through the same GH_TOKEN and GH_REPO the publish job uses.
+          release_count="$(gh api "repos/$GH_REPO/releases" --jq 'length')"
+          echo "handoff intact; the releases API answered with $release_count existing release(s)"
+
+  publish-release:
+    name: Tag and publish the GitHub release
+    needs: verify-handoff
+    if: inputs.dry_run == false
+    runs-on: ubuntu-latest
+    # The only job that writes to the repository, and it runs no build.
+    permissions:
+      contents: write
+
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+
+    steps:
+      - name: Take the SBOMs from the deploy job
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sboms
+          path: sbom
+
+      # Both steps are re-runnable: an existing release is completed rather than duplicated, and
+      # --clobber replaces an asset instead of failing on it. A run that died between the deploy
+      # and here is finished by re-dispatching the same version.
+      - name: Create the tag and the release if they are not there yet
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists — completing it."
+            exit 0
+          fi
+
+          release_flags=()
+          case "$VERSION" in
+            *-M*|*-RC*) release_flags+=(--prerelease) ;;
+          esac
+
+          # --target creates the tag server-side, so this job never pushes to master. The notes
+          # point at CHANGELOG.md because this project merges its own work without pull requests,
+          # so generated notes would list dependency bumps and nothing else.
+          gh release create "v$VERSION" \
+            --target "$GITHUB_SHA" \
+            --title "v$VERSION" \
+            --notes "Family line $VERSION. Changes: [CHANGELOG.md]($REPOSITORY_URL/blob/v$VERSION/CHANGELOG.md)." \
+            "${release_flags[@]}"
+
+      - name: Attach the SBOMs
+        run: |
+          uploaded=0
+
+          for sbom in sbom/*; do
+            [ -e "$sbom" ] || continue
+            gh release upload "v$VERSION" "$sbom" --clobber
+            uploaded=$((uploaded + 1))
+          done
+
+          if [ "$uploaded" -eq 0 ]; then
+            echo "::error::The deploy job handed over no SBOM, so none was attached."
+            exit 1
+          fi
+
+          echo "attached $uploaded SBOM(s) to v$VERSION" >> "$GITHUB_STEP_SUMMARY"

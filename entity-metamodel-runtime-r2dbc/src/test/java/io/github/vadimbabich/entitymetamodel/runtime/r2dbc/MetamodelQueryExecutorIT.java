@@ -3,17 +3,20 @@ package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ACCOUNT;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.MEMBERSHIP;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.SPONSOR;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.accountId;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.membershipAccountId;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.membershipId;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.memberships;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ownerEmail;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.owningAccount;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.sponsoringAccount;
-import static org.assertj.core.api.Assertions.assertThat;
 import static io.r2dbc.spi.ConnectionFactoryOptions.DATABASE;
 import static io.r2dbc.spi.ConnectionFactoryOptions.DRIVER;
 import static io.r2dbc.spi.ConnectionFactoryOptions.HOST;
 import static io.r2dbc.spi.ConnectionFactoryOptions.PASSWORD;
 import static io.r2dbc.spi.ConnectionFactoryOptions.PORT;
 import static io.r2dbc.spi.ConnectionFactoryOptions.USER;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.vadimbabich.entitymetamodel.runtime.Condition;
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
@@ -27,18 +30,26 @@ import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Ghost;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Membership;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.NotificationPreferenceSnapshot;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Order;
+import io.r2dbc.proxy.ProxyConnectionFactory;
+import io.r2dbc.proxy.core.QueryExecutionInfo;
+import io.r2dbc.proxy.core.QueryInfo;
 import io.r2dbc.spi.ConnectionFactories;
 import io.r2dbc.spi.ConnectionFactory;
 import io.r2dbc.spi.ConnectionFactoryOptions;
 
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.r2dbc.convert.MappingR2dbcConverter;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
@@ -58,6 +69,7 @@ import reactor.test.StepVerifier;
  * the SQL, applies the binds and reports the counts we expect cannot be.
  */
 @EnabledIf("dockerIsAvailableOrRequired")
+@Execution(ExecutionMode.SAME_THREAD)
 class MetamodelQueryExecutorIT {
 
   // Skips without Docker so the pre-commit gate reports a skip rather than a red build. Never in
@@ -75,6 +87,12 @@ class MetamodelQueryExecutorIT {
   private static ConnectionFactory connectionFactory;
   private static DatabaseClient databaseClient;
   private static MetamodelQueryExecutor executor;
+
+  // A second executor over the same database, through a connection factory that records what it
+  // executes. Separate rather than wrapping the one above, because the proxy is not transparent: it
+  // rewraps whatever bind() throws, which would change the fault the tests below assert on.
+  private static MetamodelQueryExecutor recordingExecutor;
+  private static final ExecutedStatements statements = new ExecutedStatements();
   private static CriteriaAdapter criteriaAdapter;
 
   @BeforeAll
@@ -86,14 +104,17 @@ class MetamodelQueryExecutorIT {
     databaseClient = DatabaseClient.create(connectionFactory);
 
     // One context for all three: the renderer names the columns, the converter reads them back, and
-    // the adapter resolves names against them, so two contexts would project labels nothing claims.
+    // the adapter resolves names against them.
     R2dbcMappingContext mappingContext = new R2dbcMappingContext();
     criteriaAdapter = new CriteriaAdapter(mappingContext);
-    executor =
+
+    QueryRenderer renderer = new QueryRenderer(mappingContext, PostgresDialect.INSTANCE);
+    MappingR2dbcConverter converter = new MappingR2dbcConverter(mappingContext);
+
+    executor = new MetamodelQueryExecutor(databaseClient, renderer, converter);
+    recordingExecutor =
         new MetamodelQueryExecutor(
-            databaseClient,
-            new QueryRenderer(mappingContext, PostgresDialect.INSTANCE),
-            new MappingR2dbcConverter(mappingContext));
+            DatabaseClient.create(statements.recording(connectionFactory)), renderer, converter);
 
     // block() in a fixture is the sanctioned exception: the schema is a precondition.
     execute(
@@ -128,8 +149,8 @@ class MetamodelQueryExecutorIT {
     execute("insert into document_records values (1, '{\"archived\": true, \"kind\": \"note\"}')");
     execute("insert into document_records values (2, '{\"kind\": \"invoice\"}')");
 
-    // A reserved-word entity name and a mixed-case column: the two identifier hazards no other
-    // fixture has, because every other fixture name happens to be safe.
+    // A reserved-word entity name and a mixed-case column: the two identifier hazards every other
+    // fixture name happens to avoid.
     execute("create table orders (id bigint primary key, \"placedBy\" varchar(255))");
     execute("insert into orders values (1, 'someone')");
   }
@@ -187,7 +208,7 @@ class MetamodelQueryExecutorIT {
             executor.count(
                 FluentSelect.from(ACCOUNT)
                     .where(
-                        ACCOUNT.property("id", Long.class).in(List.of(1L, 2L)))))
+                        accountId().in(List.of(1L, 2L)))))
         .expectNext(2L)
         .verifyComplete();
   }
@@ -271,8 +292,8 @@ class MetamodelQueryExecutorIT {
     StepVerifier.create(
             executor.all(
                 FluentSelect.from(ACCOUNT)
-                    .where(ACCOUNT.property("id", Long.class).in(List.of(1L, 2L)))
-                    .orderBy(ACCOUNT.property("id", Long.class).desc())))
+                    .where(accountId().in(List.of(1L, 2L)))
+                    .orderBy(accountId().desc())))
         .assertNext(account -> assertThat(account.id).isEqualTo(2L))
         .assertNext(account -> assertThat(account.id).isEqualTo(1L))
         .verifyComplete();
@@ -296,7 +317,7 @@ class MetamodelQueryExecutorIT {
   void listCollectsThePageIntoOneValue() {
     StepVerifier.create(
             executor.list(
-                FluentSelect.from(ACCOUNT).orderBy(ACCOUNT.property("id", Long.class).asc())))
+                FluentSelect.from(ACCOUNT).orderBy(accountId().asc())))
         .assertNext(accounts -> assertThat(accounts).hasSize(3))
         .verifyComplete();
   }
@@ -305,7 +326,7 @@ class MetamodelQueryExecutorIT {
   void firstTakesTheLeadingRowAndIsEmptyWhenNothingMatches() {
     StepVerifier.create(
             executor.first(
-                FluentSelect.from(ACCOUNT).orderBy(ACCOUNT.property("id", Long.class).asc())))
+                FluentSelect.from(ACCOUNT).orderBy(accountId().asc())))
         .assertNext(account -> assertThat(account.id).isEqualTo(1L))
         .verifyComplete();
 
@@ -335,8 +356,10 @@ class MetamodelQueryExecutorIT {
 
   @Test
   void aPageCarriesItsRowsAndTheTotalBehindThem() {
+    statements.mark();
+
     StepVerifier.create(
-            executor.page(
+            recordingExecutor.page(
                 FluentSelect.from(ACCOUNT), PageRequest.of(0, 2, Sort.by("id"))))
         .assertNext(
             page -> {
@@ -347,12 +370,19 @@ class MetamodelQueryExecutorIT {
               assertThat(page.hasNext()).isTrue();
             })
         .verifyComplete();
+
+    // A full page cannot know what follows it, so this is the branch that still counts.
+    assertACountWasIssued();
   }
 
   @Test
-  void theLastPageReportsNoSuccessorAndKeepsTheSameTotal() {
+  void theLastPartialPageReportsNoSuccessorAndItsTotalWithoutCounting() {
+    // A page that starts past the beginning and comes back short has seen the end of the result, so
+    // its offset plus its size is the total.
+    statements.mark();
+
     StepVerifier.create(
-            executor.page(FluentSelect.from(ACCOUNT), PageRequest.of(1, 2, Sort.by("id"))))
+            recordingExecutor.page(FluentSelect.from(ACCOUNT), PageRequest.of(1, 2, Sort.by("id"))))
         .assertNext(
             page -> {
               assertThat(page.getContent()).extracting(account -> account.id).containsExactly(3L);
@@ -360,12 +390,17 @@ class MetamodelQueryExecutorIT {
               assertThat(page.hasNext()).isFalse();
             })
         .verifyComplete();
+
+    assertOneStatementAndNoCount();
   }
 
   @Test
-  void aPageCountsOnlyWhatTheFilterKeeps() {
+  void aFirstPageShorterThanItsRequestNeedsNoCountEither() {
+    // The other elided branch: nothing was skipped and the page did not fill.
+    statements.mark();
+
     StepVerifier.create(
-            executor.page(
+            recordingExecutor.page(
                 FluentSelect.from(ACCOUNT).where(ownerEmail().is("first@example.com")),
                 PageRequest.of(0, 10)))
         .assertNext(
@@ -374,24 +409,54 @@ class MetamodelQueryExecutorIT {
               assertThat(page.getTotalElements()).isEqualTo(1L);
             })
         .verifyComplete();
+
+    assertOneStatementAndNoCount();
+  }
+
+  @Test
+  void aPageCountsOnlyWhatTheFilterKeeps() {
+    // A full page leaves rows unaccounted for, so this one does count — and the count must apply
+    // the same filter the page did.
+    statements.mark();
+
+    StepVerifier.create(
+            recordingExecutor.page(
+                FluentSelect.from(ACCOUNT).where(ownerEmail().is("first@example.com")),
+                PageRequest.of(0, 1)))
+        .assertNext(
+            page -> {
+              assertThat(page.getContent()).hasSize(1);
+              assertThat(page.getTotalElements()).isEqualTo(1L);
+            })
+        .verifyComplete();
+
+    assertACountWasIssued();
   }
 
   @Test
   void aPagePastTheEndIsEmptyButStillReportsTheTotal() {
+    // An empty page cannot skip its count: coming back empty says the offset overshot, not by how
+    // much.
+    statements.mark();
+
     StepVerifier.create(
-            executor.page(FluentSelect.from(ACCOUNT), PageRequest.of(9, 2, Sort.by("id"))))
+            recordingExecutor.page(FluentSelect.from(ACCOUNT), PageRequest.of(9, 2, Sort.by("id"))))
         .assertNext(
             page -> {
               assertThat(page.getContent()).isEmpty();
               assertThat(page.getTotalElements()).isEqualTo(3L);
             })
         .verifyComplete();
+
+    assertACountWasIssued();
   }
 
   @Test
   void anUnpagedRequestReturnsEverythingWithoutASecondStatement() {
+    statements.mark();
+
     StepVerifier.create(
-            executor.page(FluentSelect.from(ACCOUNT), Pageable.unpaged(Sort.by("id"))))
+            recordingExecutor.page(FluentSelect.from(ACCOUNT), Pageable.unpaged(Sort.by("id"))))
         .assertNext(
             page -> {
               assertThat(page.getContent()).extracting(account -> account.id)
@@ -399,6 +464,284 @@ class MetamodelQueryExecutorIT {
               assertThat(page.getTotalElements()).isEqualTo(3L);
             })
         .verifyComplete();
+
+    assertOneStatementAndNoCount();
+  }
+
+  @Test
+  void aSliceCarriesItsRowsAndReportsASuccessorWithoutCounting() {
+    statements.mark();
+
+    StepVerifier.create(
+            recordingExecutor.slice(
+                FluentSelect.from(ACCOUNT), PageRequest.of(0, 2, Sort.by("id"))))
+        .assertNext(
+            slice -> {
+              assertThat(slice.getContent())
+                  .extracting(account -> account.id)
+                  .containsExactly(1L, 2L);
+              assertThat(slice.hasNext()).isTrue();
+            })
+        .verifyComplete();
+
+    // The successor was reported by the row past the page, not by a second statement.
+    assertOneStatementAndNoCount();
+  }
+
+  @Test
+  void aSliceWhoseMatchesExactlyFillThePageReportsNoSuccessor() {
+    // Three rows into a page of three is the last page; three rows into a page of two is not.
+    StepVerifier.create(
+            executor.slice(FluentSelect.from(ACCOUNT), PageRequest.of(0, 3, Sort.by("id"))))
+        .assertNext(
+            slice -> {
+              assertThat(slice.getContent())
+                  .extracting(account -> account.id)
+                  .containsExactly(1L, 2L, 3L);
+              assertThat(slice.hasNext()).isFalse();
+            })
+        .verifyComplete();
+  }
+
+  @Test
+  void aSliceMapsThePageItReturnsAndNotTheProbeRow() {
+    AtomicInteger mapperCalls = new AtomicInteger();
+
+    StepVerifier.create(
+            executor.slice(
+                FluentSelect.from(ACCOUNT),
+                PageRequest.of(0, 2, Sort.by("id")),
+                row -> {
+                  mapperCalls.incrementAndGet();
+                  return row.read(ACCOUNT).ownerEmail;
+                }))
+        .assertNext(
+            slice ->
+                assertThat(slice.getContent())
+                    .containsExactly("first@example.com", "second@example.com"))
+        .verifyComplete();
+
+    // Three rows were fetched and two returned, and the mapper saw only those two: one that counts,
+    // caches or audits would otherwise drift by one on every slice with a successor.
+    assertThat(mapperCalls).hasValue(2);
+  }
+
+  @Test
+  void aSliceDoesNotMapTheProbeRowSoAnAbsentOuterJoinPastThePageCannotFailIt() {
+    // Membership 13's sponsor does not exist, so read(SPONSOR) throws on the fourth row — which a
+    // slice of three fetches as its probe and a page of three never sees.
+    FluentSelect<Membership> sponsored =
+        FluentSelect.from(MEMBERSHIP)
+            .leftOuterJoin(sponsoringAccount(), SPONSOR)
+            .alsoSelect(SPONSOR);
+
+    StepVerifier.create(
+            executor.slice(
+                sponsored,
+                PageRequest.of(0, 3, Sort.by("id")),
+                row -> row.read(SPONSOR).id))
+        .assertNext(
+            slice -> {
+              assertThat(slice.getContent()).containsExactly(2L, 2L, 1L);
+              assertThat(slice.hasNext()).isTrue();
+            })
+        .verifyComplete();
+  }
+
+  @Test
+  void aSliceOfTheLargestLegalPageReturnsEverythingAndReportsNoSuccessor() {
+    // PageRequest.of(0, MAX_VALUE) is paged, so it carries a probe row the result set never
+    // reaches.
+    StepVerifier.create(
+            executor.slice(FluentSelect.from(ACCOUNT), PageRequest.of(0, Integer.MAX_VALUE)))
+        .assertNext(
+            slice -> {
+              assertThat(slice.getContent()).hasSize(3);
+              assertThat(slice.hasNext()).isFalse();
+            })
+        .verifyComplete();
+  }
+
+  @Test
+  void resubscribingToASliceAnswersTheSameThingTwice() {
+    // The row counter has to belong to the subscription rather than the description: one shared
+    // across subscriptions would let the second run start past its own page.
+    Mono<Slice<Account>> firstPage =
+        executor.slice(FluentSelect.from(ACCOUNT), PageRequest.of(0, 2, Sort.by("id")));
+
+    for (int subscription = 0; subscription < 2; subscription++) {
+      StepVerifier.create(firstPage)
+          .assertNext(
+              slice -> {
+                assertThat(slice.getContent())
+                    .extracting(account -> account.id)
+                    .containsExactly(1L, 2L);
+                assertThat(slice.hasNext()).isTrue();
+              })
+          .verifyComplete();
+    }
+  }
+
+  @Test
+  void aSlicePastTheEndIsEmptyAndReportsNoSuccessor() {
+    StepVerifier.create(
+            executor.slice(FluentSelect.from(ACCOUNT), PageRequest.of(9, 2, Sort.by("id"))))
+        .assertNext(
+            slice -> {
+              assertThat(slice.getContent()).isEmpty();
+              assertThat(slice.hasNext()).isFalse();
+            })
+        .verifyComplete();
+  }
+
+  @Test
+  void anUnpagedSliceOverABoundedDescriptionReportsNoSuccessorThoughRowsWereLeftBehind() {
+    // Decided, not incidental: a slice has no total to protect and an unpaged request has no next
+    // page to ask for, so no successor is the only answer it can express.
+    StepVerifier.create(
+            executor.slice(FluentSelect.from(ACCOUNT).limit(2), Pageable.unpaged(Sort.by("id"))))
+        .assertNext(
+            slice -> {
+              assertThat(slice.getContent())
+                  .extracting(account -> account.id)
+                  .containsExactly(1L, 2L);
+              assertThat(slice.hasNext()).isFalse();
+            })
+        .verifyComplete();
+  }
+
+  @Test
+  void anUnpagedSliceReturnsEverythingInOneSliceWithoutLimitingOrCounting() {
+    statements.mark();
+
+    StepVerifier.create(
+            recordingExecutor.slice(FluentSelect.from(ACCOUNT), Pageable.unpaged(Sort.by("id"))))
+        .assertNext(
+            slice -> {
+              assertThat(slice.getContent())
+                  .extracting(account -> account.id)
+                  .containsExactly(1L, 2L, 3L);
+              assertThat(slice.hasNext()).isFalse();
+            })
+        .verifyComplete();
+
+    assertOneStatementAndNoCount();
+    assertThat(statements.sinceMark()).noneMatch(sql -> sql.contains("LIMIT"));
+  }
+
+  @Test
+  void aSliceOfAMultipliedDescriptionCarriesDuplicatesJustAsItsPageDoes() {
+    FluentSelect<Account> perMembership = FluentSelect.from(ACCOUNT).join(memberships());
+
+    StepVerifier.create(executor.slice(perMembership, PageRequest.of(0, 2, Sort.by("id"))))
+        .assertNext(
+            slice -> {
+              assertThat(slice.getContent())
+                  .extracting(account -> account.id)
+                  .containsExactly(1L, 1L);
+              assertThat(slice.hasNext()).isTrue();
+            })
+        .verifyComplete();
+  }
+
+  @Test
+  void aDistinctSliceCountsItsProbeRowInDistinctRowsToo() {
+    // Three joined rows, two distinct accounts. The row fetched beyond the page has to be distinct
+    // as well.
+    FluentSelect<Account> distinctAccounts =
+        FluentSelect.from(ACCOUNT).join(memberships()).distinct();
+
+    StepVerifier.create(executor.slice(distinctAccounts, PageRequest.of(0, 1, Sort.by("id"))))
+        .assertNext(
+            slice -> {
+              assertThat(slice.getContent()).extracting(account -> account.id).containsExactly(1L);
+              assertThat(slice.hasNext()).isTrue();
+            })
+        .verifyComplete();
+  }
+
+  @Test
+  void aKeysetPredicateOnTheLeadingKeyAloneSkipsRowsThatShareIt() {
+    // Deliberately the wrong recipe, kept because it is the failure the right one prevents and the
+    // reason the README states a unique terminal key as a caller obligation: standing after (1,
+    // 10), a predicate on accountId alone jumps silently past membership 11, which shares it.
+    assertPageAfter(membershipAccountId().gt(1L), 12L);
+  }
+
+  @Test
+  void theRowValueFormTakesTheOppositeOperatorToWalkAnAllDescendingSort() {
+    // Descending by (accountId, membershipId), the sort still runs one direction throughout, so the
+    // row-value form applies with < rather than >. Reaching for > is silent: the SQL is valid, the
+    // plan still seeks, and the traversal re-serves the leading row for ever.
+    assertLeadingRow(descendingByKey(), 13L);
+
+    assertDescendingPageAfter(rowValueKeysetBefore(999L, 13L), 12L);
+    assertDescendingPageAfter(rowValueKeysetBefore(2L, 12L), 11L);
+    assertDescendingPageAfter(rowValueKeysetBefore(1L, 11L), 10L);
+    assertDescendingPageAfter(rowValueKeysetBefore(1L, 10L));
+  }
+
+  @Test
+  void bothDocumentedKeysetFormsWalkEveryRowOnceAcrossATiedLeadingKey() {
+    // Memberships ordered by (accountId, membershipId): (1,10), (1,11), (2,12), (999,13).
+    assertLeadingRow(ascendingByKey(), 10L);
+
+    assertPageAfter(expandedKeysetAfter(1L, 10L), 11L);
+    assertPageAfter(expandedKeysetAfter(1L, 11L), 12L);
+    assertPageAfter(expandedKeysetAfter(2L, 12L), 13L);
+    assertPageAfter(expandedKeysetAfter(999L, 13L));
+
+    assertPageAfter(rowValueKeysetAfter(1L, 10L), 11L);
+    assertPageAfter(rowValueKeysetAfter(1L, 11L), 12L);
+    assertPageAfter(rowValueKeysetAfter(2L, 12L), 13L);
+    assertPageAfter(rowValueKeysetAfter(999L, 13L));
+  }
+
+  // One keyset step: the leading page of the sort both recipes are written against, narrowed by
+  // whichever cursor predicate is under test.
+  private void assertPageAfter(Condition after, Long... expectedIds) {
+    assertLeadingRow(ascendingByKey().where(after), expectedIds);
+  }
+
+  private void assertDescendingPageAfter(Condition before, Long... expectedIds) {
+    assertLeadingRow(descendingByKey().where(before), expectedIds);
+  }
+
+  private static FluentSelect<Membership> ascendingByKey() {
+    return FluentSelect.from(MEMBERSHIP)
+        .orderBy(membershipAccountId().asc(), membershipId().asc())
+        .limit(1);
+  }
+
+  private static FluentSelect<Membership> descendingByKey() {
+    return FluentSelect.from(MEMBERSHIP)
+        .orderBy(membershipAccountId().desc(), membershipId().desc())
+        .limit(1);
+  }
+
+  private void assertLeadingRow(FluentSelect<Membership> onePage, Long... expectedIds) {
+    StepVerifier.create(executor.list(onePage))
+        .assertNext(
+            memberships ->
+                assertThat(memberships)
+                    .extracting(membership -> membership.id)
+                    .containsExactly(expectedIds))
+        .verifyComplete();
+  }
+
+  private static Condition expandedKeysetAfter(long cursorAccountId, long cursorMembershipId) {
+    return ProductionPatterns.expandedKeysetAfter(
+        membershipAccountId(), cursorAccountId, membershipId(), cursorMembershipId);
+  }
+
+  private static Condition rowValueKeysetAfter(long cursorAccountId, long cursorMembershipId) {
+    return ProductionPatterns.rowValueKeysetAfter(
+        membershipAccountId(), cursorAccountId, membershipId(), cursorMembershipId);
+  }
+
+  private static Condition rowValueKeysetBefore(long cursorAccountId, long cursorMembershipId) {
+    return ProductionPatterns.rowValueKeysetBefore(
+        membershipAccountId(), cursorAccountId, membershipId(), cursorMembershipId);
   }
 
   @Test
@@ -437,8 +780,8 @@ class MetamodelQueryExecutorIT {
         FluentSelect.from(MEMBERSHIP)
             .join(ACCOUNT)
             .on(
-                MEMBERSHIP.property("accountId", Long.class)
-                    .eq(ACCOUNT.property("id", Long.class))
+                membershipAccountId()
+                    .eq(accountId())
                     .and(ownerEmail().is("first@example.com")));
 
     StepVerifier.create(executor.list(ownedByAnActiveAccount))
@@ -455,7 +798,7 @@ class MetamodelQueryExecutorIT {
             executor.list(
                 FluentSelect.from(ACCOUNT)
                     .where(ownerEmail().is("first@example.com").not())
-                    .orderBy(ACCOUNT.property("id", Long.class).asc())))
+                    .orderBy(accountId().asc())))
         .assertNext(
             accounts ->
                 assertThat(accounts).extracting(account -> account.id).containsExactly(2L, 3L))
@@ -495,7 +838,8 @@ class MetamodelQueryExecutorIT {
   @Test
   void anExternallyBuiltFilterScopedToAJoinedInstanceFiltersThatInstancesRows() {
     // Membership 12 is owned by account 2 but sponsored by account 1, so a filter resolved against
-    // the owner would return it. Membership 13's sponsor does not exist and the inner join drops it.
+    // the owner would return it. Membership 13's sponsor does not exist, so the inner join drops
+    // it.
     Condition sponsoredBySecond =
         criteriaAdapter
             .toCondition(Criteria.where("ownerEmail").is("second@example.com"), SPONSOR)
@@ -518,8 +862,8 @@ class MetamodelQueryExecutorIT {
 
   @Test
   void anUnpagedRequestOverABoundedDescriptionStillCountsTheWholeSet() {
-    // The rows in hand are the total only when nothing was left behind. A description carrying its
-    // own limit leaves rows behind, so reporting its size as the total would fabricate one.
+    // A description carrying its own limit leaves rows behind, so reporting the rows in hand as the
+    // total would fabricate one.
     StepVerifier.create(
             executor.page(FluentSelect.from(ACCOUNT).limit(2), Pageable.unpaged(Sort.by("id"))))
         .assertNext(
@@ -553,7 +897,7 @@ class MetamodelQueryExecutorIT {
   @Test
   void aRequestedSortLeadsTheDescriptionsOwn() {
     FluentSelect<Account> byIdDescending =
-        FluentSelect.from(ACCOUNT).orderBy(ACCOUNT.property("id", Long.class).desc());
+        FluentSelect.from(ACCOUNT).orderBy(accountId().desc());
 
     StepVerifier.create(executor.page(byIdDescending, PageRequest.of(0, 3, Sort.by("ownerEmail"))))
         .assertNext(
@@ -586,8 +930,8 @@ class MetamodelQueryExecutorIT {
 
   @Test
   void aJoinToTheManySideMultipliesRowsAndEveryTerminalCountsThem() {
-    // The direction that expands. Filtering a parent by a child attribute is the usual reason to
-    // join and reads as a restriction, so the multiplication is pinned here.
+    // Filtering a parent by a child attribute is the usual reason to join and reads as a
+    // restriction, so the multiplication is pinned here.
     JoinRef<Account, Membership> memberships = memberships();
     FluentSelect<Account> perMembership = FluentSelect.from(ACCOUNT).join(memberships);
 
@@ -620,13 +964,12 @@ class MetamodelQueryExecutorIT {
 
   @Test
   void distinctCollapsesAMultipliedDescriptionToItsDistinctRows() {
-    // The remedy for the multiplication the two tests above pin: accounts 1 and 2 have
-    // memberships, account 1 has two of them.
+    // The remedy for the multiplication the two tests above pin.
     FluentSelect<Account> distinctAccounts =
         FluentSelect.from(ACCOUNT)
             .join(memberships())
             .distinct()
-            .orderBy(ACCOUNT.property("id", Long.class).asc());
+            .orderBy(accountId().asc());
 
     StepVerifier.create(executor.list(distinctAccounts))
         .assertNext(
@@ -656,9 +999,9 @@ class MetamodelQueryExecutorIT {
 
   @Test
   void aDistinctProbePastAnOffsetSkipsDistinctRowsRatherThanJoinedOnes() {
-    // Three joined rows but two distinct accounts. Both offsets matter: without the first, a probe
-    // whose DISTINCT collapsed a literal to one row still passes; without the second, joined rows
-    // pass as distinct ones.
+    // Three joined rows but two distinct accounts. Both offsets matter: without the first a probe
+    // whose DISTINCT collapsed a literal still passes, without the second joined rows pass as
+    // distinct ones.
     FluentSelect<Account> perMembership = FluentSelect.from(ACCOUNT).join(memberships());
 
     StepVerifier.create(executor.exists(perMembership.offset(2)))
@@ -676,15 +1019,14 @@ class MetamodelQueryExecutorIT {
 
   @Test
   void aCorrelatedExistsFragmentRestrictsWithoutMultiplyingOrDeduplicating() {
-    // The third remedy beside the two above: nothing joins, so nothing multiplies and nothing
-    // needs collapsing — the count is entity-shaped without a derived table.
+    // The third remedy: nothing joins, so the count is entity-shaped without a derived table.
     FluentSelect<Account> withMemberships =
         FluentSelect.from(ACCOUNT)
             .where(
                 SqlExpr.raw(
                     "EXISTS (SELECT 1 FROM memberships m WHERE m.account_id = {0})",
-                    ACCOUNT.property("id", Long.class)))
-            .orderBy(ACCOUNT.property("id", Long.class).asc());
+                    accountId()))
+            .orderBy(accountId().asc());
 
     StepVerifier.create(executor.list(withMemberships))
         .assertNext(
@@ -697,8 +1039,8 @@ class MetamodelQueryExecutorIT {
 
   /**
    * PostgreSQL spells jsonb key existence with question marks, which the template grammar leaves as
-   * literal text. {@code ?|} takes {@code text[]} on its right, so the argument is an array and
-   * needs the {@code (Object)} cast that keeps varargs from spreading it.
+   * literal text. {@code ?|} takes {@code text[]}, so its argument needs the {@code (Object)} cast
+   * that keeps varargs from spreading the array.
    */
   @Test
   void aJsonbKeyExistenceOperatorExecutesWithItsArrayBound() {
@@ -715,9 +1057,8 @@ class MetamodelQueryExecutorIT {
   }
 
   /**
-   * The containment half, and why its cast is load-bearing: a bound parameter arrives typed as
-   * text, where a literal in hand-written SQL would be resolved to jsonb by context. Without
-   * {@code ::jsonb} the operator has no candidate.
+   * The containment half. A bound parameter arrives typed as text where a literal would be resolved
+   * to jsonb by context, so without {@code ::jsonb} the operator has no candidate.
    */
   @Test
   void aJsonbContainmentOperatorExecutesWhenTheBoundParameterIsCast() {
@@ -858,8 +1199,8 @@ class MetamodelQueryExecutorIT {
 
   /**
    * The same three members, chained and grouped, do not mean the same thing, and both readings
-   * arrive from the filter layer. Parity against the template would be satisfied by two sides
-   * folding a chain the same wrong way; these row sets separate the readings absolutely.
+   * arrive from the filter layer. Parity alone would be satisfied by two sides folding a chain the
+   * same wrong way; these row sets separate the readings.
    */
   @Test
   void aNarrowingAndAppliesToAGroupedRangeButNotToAChainedOne() {
@@ -930,10 +1271,7 @@ class MetamodelQueryExecutorIT {
         .verifyComplete();
   }
 
-  /**
-   * The two halves of this rule live in different classes, and the combination reads as if it
-   * should deduplicate.
-   */
+  /** The two halves of this rule live in different classes, and it reads as if it deduplicates. */
   @Test
   void distinctCollapsesProjectedRowsRatherThanWhatAProjectionNarrowsThemTo() {
     FluentSelect<Membership> distinctRows =
@@ -1063,5 +1401,84 @@ class MetamodelQueryExecutorIT {
     StepVerifier.create(executor.count(FluentSelect.from(ACCOUNT)))
         .thenCancel()
         .verify();
+  }
+
+  @Test
+  void cancellingAPageOrASliceBeforeItArrivesTerminatesWithoutCompleting() {
+    // Both collect their rows before they can answer, so a cancel lands mid-fetch and must release
+    // the connection rather than strand it.
+    StepVerifier.create(executor.page(FluentSelect.from(ACCOUNT), PageRequest.of(0, 2)))
+        .thenCancel()
+        .verify();
+    StepVerifier.create(executor.slice(FluentSelect.from(ACCOUNT), PageRequest.of(0, 2)))
+        .thenCancel()
+        .verify();
+    StepVerifier.create(
+            executor.slice(
+                FluentSelect.from(ACCOUNT), PageRequest.of(0, 2), row -> row.read(ACCOUNT).id))
+        .thenCancel()
+        .verify();
+  }
+
+  @Test
+  void aSliceOverAStatementTheDatabaseRejectsArrivesAsAnErrorSignal() {
+    StepVerifier.create(executor.slice(FluentSelect.from(GHOST), PageRequest.of(0, 2)))
+        .expectError()
+        .verify();
+    StepVerifier.create(
+            executor.slice(FluentSelect.from(GHOST), PageRequest.of(0, 2), row -> row.read(GHOST)))
+        .expectError()
+        .verify();
+  }
+
+  // The negative assertion is the whole value: one statement and no count is what an elided count
+  // looks like, and nothing else in the result distinguishes it from a count that ran.
+  private static void assertOneStatementAndNoCount() {
+    assertThat(statements.sinceMark()).hasSize(1).noneMatch(MetamodelQueryExecutorIT::isACount);
+  }
+
+  private static void assertACountWasIssued() {
+    assertThat(statements.sinceMark()).filteredOn(MetamodelQueryExecutorIT::isACount).hasSize(1);
+  }
+
+  private static boolean isACount(String sql) {
+    return sql.startsWith("SELECT COUNT(");
+  }
+
+  /**
+   * The statements the driver actually executed, so a test can assert what was <em>not</em> issued.
+   *
+   * <p>Wrapped with the R2DBC project's own listener SPI rather than a hand-written decorator:
+   * {@code io.r2dbc.spi.Connection} alone declares eighteen methods that would otherwise need plain
+   * delegation here.
+   */
+  private static final class ExecutedStatements {
+
+    // Appended from the driver's event-loop thread and read from the test thread.
+    private final List<String> executed = new CopyOnWriteArrayList<>();
+
+    ConnectionFactory recording(ConnectionFactory target) {
+      // onBeforeQuery, not onAfterQuery: a negative assertion must not depend on the callback
+      // arriving before the terminal signal StepVerifier waits for.
+      return ProxyConnectionFactory.builder(target).onBeforeQuery(this::record).build();
+    }
+
+    // Since a mark rather than since JVM start: one listener serves every method here, so "no count
+    // was recorded" over a global list would pass or fail on what ran before. The mark is global,
+    // so it is only sound while this class runs on one thread — which is what the class-level
+    // SAME_THREAD declaration keeps true if parallel execution is ever switched on.
+    void mark() {
+      executed.clear();
+    }
+
+    List<String> sinceMark() {
+      return List.copyOf(executed);
+    }
+
+    private void record(QueryExecutionInfo execution) {
+      for (QueryInfo query : execution.getQueries()) {
+        executed.add(query.getQuery());
+      }
+    }
   }
 }

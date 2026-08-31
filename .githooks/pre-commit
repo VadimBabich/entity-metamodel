@@ -3,7 +3,8 @@
 # Enable once per clone:  git config core.hooksPath .githooks
 #
 # A convenience, not the control — a clone without that config has no hooks at all. The Guards
-# workflow re-runs the same checks on push.
+# workflow re-runs the email check on push; the readiness checks below are local-only, so this hook
+# is the only place a human contributor gets them.
 
 set -euo pipefail
 
@@ -11,3 +12,4 @@ repository_root="$(git rev-parse --show-toplevel)"
 readonly repository_root
 
 "${repository_root}/.github/scripts/check-emails.sh" staged
+"${repository_root}/.github/scripts/branch-ready.sh"

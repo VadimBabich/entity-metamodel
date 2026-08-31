@@ -58,9 +58,9 @@
     <!-- Stamped by the release workflow, not by any plugin. Never hand-edit mid-cycle. -->
     <project.build.outputTimestamp>2026-08-08T00:00:00Z</project.build.outputTimestamp>
 
-    <!-- Version numbers only, nothing declared or managed: a BOM import pulls the imported
-         POM's effective dependencyManagement, parent-inherited entries included, so anything
-         managed here would reach every consumer of entity-metamodel-bom. -->
+    <!-- Version numbers only, nothing declared or managed: a BOM import pulls the imported POM's
+         effective dependencyManagement, parent-inherited entries included, so anything managed
+         here would reach every consumer of entity-metamodel-bom. -->
     <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
     <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
     <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
@@ -69,11 +69,10 @@
     <junit.version>6.1.3</junit.version>
     <assertj-core.version>3.27.7</assertj-core.version>
     <!-- Supported substrate range is Spring Data 4.0.x-4.1.x. One property for all three of its
-         artifacts on purpose: they ship as one release train and mixing them is unsupported, so a
-         tool that bumps dependencies one at a time must not be able to produce a mixed set — the
-         failure it would buy is a linkage error at runtime rather than a broken build. Reactor is
-         pinned to the version spring-data-r2dbc itself declares, so the direct and transitive
-         views agree. -->
+         artifacts on purpose: they ship as one release train, so a tool that bumps dependencies one
+         at a time must not be able to produce a mixed set — that failure is a linkage error at
+         runtime, not a broken build. Reactor is pinned to the version spring-data-r2dbc itself
+         declares, so the direct and transitive views agree. -->
     <spring-data.version>4.1.1</spring-data.version>
     <spring-r2dbc.version>7.0.9</spring-r2dbc.version>
     <reactor.version>3.8.7</reactor.version>
@@ -82,15 +81,19 @@
          driven through r2dbc-postgresql. Never compile-scope. -->
     <testcontainers.version>2.0.5</testcontainers.version>
     <r2dbc-postgresql.version>1.1.2.RELEASE</r2dbc-postgresql.version>
-    <netty.version>4.2.17.Final</netty.version>
+    <r2dbc-proxy.version>1.1.6.RELEASE</r2dbc-proxy.version>
+    <netty.version>4.1.137.Final</netty.version>
   </properties>
 
   <build>
     <pluginManagement>
       <plugins>
         <!-- Super-POM defaults vary with the local Maven version, which would make jar bytes
-             environment-dependent. Versions only; configuration stays per module: a managed
-             <configuration> here would reach every module at once. -->
+             environment-dependent. pluginManagement is never exported to a BOM consumer — only
+             dependencyManagement is — so managing configuration here is safe, and it reaches every
+             module at once, which for the lint contract is the intent. Automatic-Module-Name stays
+             per module: it is module identity, and a managed default would let a new module inherit
+             a wrong or unresolved name silently. -->
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-jar-plugin</artifactId>
@@ -100,6 +103,13 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-compiler-plugin</artifactId>
           <version>${maven-compiler-plugin.version}</version>
+          <configuration>
+            <release>${java.release}</release>
+            <compilerArgs>
+              <arg>-Xlint:all</arg>
+            </compilerArgs>
+            <failOnWarning>true</failOnWarning>
+          </configuration>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
@@ -134,6 +144,7 @@
                 <requireJavaVersion>
                   <version>[17,)</version>
                 </requireJavaVersion>
+                <banDuplicatePomDependencyVersions/>
               </rules>
             </configuration>
           </execution>
@@ -143,17 +154,49 @@
   </build>
 
   <profiles>
-    <!-- Not always-on: GPG must not run on PRs or dev builds. Inert until a release
+    <!-- Not always-on: GPG must not run on pull request or dev builds. Inert until a release
          dispatch activates it. -->
     <profile>
       <id>release</id>
       <properties>
-        <!-- Stays true for every build; the release workflow overrides it once it has
-             verified the signing secrets exist. -->
+        <!-- Stays true for every build; the release workflow overrides it once it has verified
+             the signing secrets exist. -->
         <gpg.skip>true</gpg.skip>
+        <!-- A sentinel, not a default: a value that cannot be a version means a release which
+             forgets to pass the dispatched one fails instead of comparing the tree against
+             itself. -->
+        <expected.release.version>UNSET</expected.release.version>
       </properties>
       <build>
         <plugins>
+          <!-- Central is immutable, so a module left on the wrong version publishes permanently.
+               enforcer runs in every module, so this compares each module's effective version —
+               inherited from the parent or declared by the module itself, which versions:set does
+               not rewrite — against the version the dispatch asked for. -->
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-enforcer-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>enforce-release-version</id>
+                <goals>
+                  <goal>enforce</goal>
+                </goals>
+                <configuration>
+                  <rules>
+                    <evaluateBeanshell>
+                      <condition>"${project.version}".equals("${expected.release.version}")</condition>
+                      <message>This module is at ${project.version} but the release asked for
+                        ${expected.release.version}. UNSET means the deploy did not pass
+                        -Dexpected.release.version; any other value means the version stamp did not
+                        reach every module.</message>
+                    </evaluateBeanshell>
+                  </rules>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+
           <plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-source-plugin</artifactId>
@@ -218,8 +261,8 @@
             <extensions>true</extensions>
             <configuration>
               <publishingServerId>central</publishingServerId>
-              <!-- The deployment stops at VALIDATED; publishing or dropping it is an
-                   explicit act. -->
+              <!-- The deployment stops at VALIDATED; publishing or dropping it is an explicit
+                   act. -->
               <autoPublish>false</autoPublish>
               <waitUntil>validated</waitUntil>
             </configuration>

@@ -34,6 +34,12 @@ class PageableTranslationTest {
     return renderer.render(translator.applyTo(FluentSelect.from(ACCOUNT), pageable)).sql();
   }
 
+  private String probingSqlOf(Pageable pageable) {
+    return renderer
+        .render(translator.applyToWithProbeRow(FluentSelect.from(ACCOUNT), pageable).select())
+        .sql();
+  }
+
   @Test
   void aPageRequestBecomesTheLimitAndOffsetOfThatPage() {
     assertThat(sqlOf(PageRequest.of(2, 25))).endsWith("LIMIT 25 OFFSET 50");
@@ -100,8 +106,6 @@ class PageableTranslationTest {
 
   @Test
   void aPagedRequestOverADescriptionThatAlreadyBoundsItselfIsRefused() {
-    // Two windows, one statement. Overwriting loses a safety cap silently and in the offset
-    // direction returns exactly the rows the description said to skip.
     assertThatExceptionOfType(IllegalArgumentException.class)
         .isThrownBy(
             () -> translator.applyTo(FluentSelect.from(ACCOUNT).limit(500), PageRequest.of(0, 10)))
@@ -178,5 +182,83 @@ class PageableTranslationTest {
         .isThrownBy(() -> translator.applyTo(null, Pageable.unpaged()));
     assertThatExceptionOfType(NullPointerException.class)
         .isThrownBy(() -> translator.applyTo(FluentSelect.from(ACCOUNT), null));
+  }
+
+  @Test
+  void aProbingRequestAsksForOneRowMoreThanThePageItWindows() {
+    assertThat(probingSqlOf(PageRequest.of(2, 25))).endsWith("LIMIT 26 OFFSET 50");
+  }
+
+  @Test
+  void aProbingRequestReportsTheRowsItWindowedTheProbeRowBeyond() {
+    // slice(...) trims to this rather than to the request, so the two cannot drift apart.
+    assertThat(
+            translator
+                .applyToWithProbeRow(FluentSelect.from(ACCOUNT), PageRequest.of(2, 25))
+                .rowsPerPage())
+        .hasValue(25L);
+
+    assertThat(
+            translator
+                .applyToWithProbeRow(FluentSelect.from(ACCOUNT), Pageable.unpaged())
+                .rowsPerPage())
+        .isEmpty();
+  }
+
+  @Test
+  void aProbingRequestForTheLargestLegalPageStillRenders() {
+    // In int arithmetic the probe row wraps this page size to a negative limit.
+    assertThat(probingSqlOf(Pageable.ofSize(Integer.MAX_VALUE)))
+        .endsWith("LIMIT 2147483648 OFFSET 0");
+  }
+
+  @Test
+  void anUnpagedProbingRequestNeverReachesThePageSize() {
+    // Pageable.unpaged().getPageSize() throws, so the unpaged branch has to return before any
+    // arithmetic on it.
+    assertThat(probingSqlOf(Pageable.unpaged())).doesNotContain("LIMIT").doesNotContain("OFFSET");
+  }
+
+  @Test
+  void aProbingRequestOverADescriptionThatAlreadyBoundsItselfIsRefused() {
+    // The probe row is a second window as much as the page is, so it inherits the same refusal.
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(
+            () ->
+                translator.applyToWithProbeRow(
+                    FluentSelect.from(ACCOUNT).limit(500), PageRequest.of(0, 10)))
+        .withMessageContaining("limit");
+
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(
+            () ->
+                translator.applyToWithProbeRow(
+                    FluentSelect.from(ACCOUNT).offset(10), PageRequest.of(0, 10)))
+        .withMessageContaining("offset");
+  }
+
+  @Test
+  void aProbingRequestsSortLeadsTheDescriptionsOwnJustAsAPagesDoes() {
+    FluentSelect<Account> byIdDescending =
+        FluentSelect.from(ACCOUNT).orderBy(ACCOUNT.property("id", Long.class).desc());
+
+    String sql =
+        renderer
+            .render(
+                translator.applyToWithProbeRow(
+                        byIdDescending, PageRequest.of(0, 10, Sort.by("ownerEmail")))
+                    .select())
+            .sql();
+
+    assertThat(sql)
+        .contains("ORDER BY \"account\".\"owner_email\" ASC, \"account\".\"account_id\" DESC");
+  }
+
+  @Test
+  void aProbingRequestRejectsAMissingDescriptionOrRequest() {
+    assertThatExceptionOfType(NullPointerException.class)
+        .isThrownBy(() -> translator.applyToWithProbeRow(null, Pageable.unpaged()));
+    assertThatExceptionOfType(NullPointerException.class)
+        .isThrownBy(() -> translator.applyToWithProbeRow(FluentSelect.from(ACCOUNT), null));
   }
 }
