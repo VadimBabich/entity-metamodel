@@ -14,6 +14,22 @@ on:
 permissions:
   contents: read
 
+# Feature-branch pushes stay a trigger on purpose: this project merges its own branches without
+# opening a pull request, so the push run is the only CI those commits ever get. The group key pays
+# for the duplicate triggers that buys: a branch push and the pull request from that same branch
+# share one group, so the superseded run is cancelled.
+#
+# The repository component isolates fork pull requests: head.ref is a bare branch name, so a fork
+# branch called master would otherwise share this repository's master group. head.label carries the
+# owner but reads "owner:branch" for same-repo pull requests too, which would split every dependabot
+# pull request from its own branch push and lose that deduplication.
+#
+# Cancellation is off on master: two commits landing close together must not leave the release line
+# with no completed build.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 defaults:
   run:
     shell: bash
@@ -39,10 +55,20 @@ jobs:
       - name: Build and test
         run: mvn -B verify
 
-  # Proves the reproducible-build mechanism off the maintainer's machine: two clean
-  # test-skipped builds must produce byte-identical jars (project.build.outputTimestamp
-  # pins the timestamps). JDK 21 = the release JDK. Cross-JDK/cross-OS comparison is a
-  # designed follow-up, deliberately not gated here.
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-reports-jdk${{ matrix.java }}
+          path: |
+            **/target/surefire-reports/**
+            **/target/failsafe-reports/**
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Proves the reproducible-build mechanism off the maintainer's machine: two clean test-skipped
+  # builds must produce byte-identical jars. JDK 21 is the release JDK; cross-JDK and cross-OS
+  # comparison is a designed follow-up, deliberately not gated here.
   reproducibility:
     runs-on: ubuntu-latest
     name: Reproducible build check
@@ -61,8 +87,8 @@ jobs:
           mvn -B clean package -DskipTests
           find . -path '*/target/*.jar' -not -path '*/it/*' -print0 | sort -z \
             | xargs -0 sha256sum > "$RUNNER_TEMP/first-build.sha256"
-          # An empty digest file compares equal to an empty digest file: without this the
-          # gate reports green when the jar glob stops matching (module move, target override).
+          # An empty digest file compares equal to an empty digest file: without this the gate
+          # reports green when the jar glob stops matching (module move, target override).
           test -s "$RUNNER_TEMP/first-build.sha256"
           mvn -B clean package -DskipTests
           find . -path '*/target/*.jar' -not -path '*/it/*' -print0 | sort -z \

@@ -152,6 +152,7 @@ check_staged() {
   local diff_text
   local added_lines
 
+  # git config exits 1 when the key is unset; the empty case is handled below.
   configured_identity="$(git config user.email || true)"
 
   if [[ -z "${configured_identity}" ]]; then

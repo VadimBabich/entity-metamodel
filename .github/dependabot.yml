@@ -1,10 +1,10 @@
-# Version updates for the reactor's POMs and the pinned workflow actions.
-# Modest PR limits: solo-maintained repository.
+# Modest pull request limits: solo-maintained repository.
 version: 2
 updates:
   - package-ecosystem: "maven"
     directories:
       - "/"
+      - "/entity-metamodel-bom"
       - "/entity-metamodel-core"
       - "/entity-metamodel-runtime"
       - "/entity-metamodel-runtime-r2dbc"
@@ -12,6 +12,29 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      # The three spring-data artifacts already move together through one property; spring-r2dbc
+      # and reactor have their own and have been bumped separately, which is the mixed set the root
+      # POM calls unsupported. One pull request makes that drift visible in review — grouping
+      # batches the updates, it does not enforce that they all move.
+      substrate-train:
+        patterns:
+          - "org.springframework.data:*"
+          - "org.springframework:spring-r2dbc"
+          - "io.projectreactor:*"
+      test-tooling:
+        patterns:
+          - "org.junit.jupiter:*"
+          - "org.assertj:*"
+          - "org.testcontainers:*"
+          - "org.postgresql:r2dbc-postgresql"
+          - "io.r2dbc:*"
+    ignore:
+      # Crossing this minor is what the r2dbc module's netty pin exists to prevent: netty fixes
+      # both lines for the same advisories, and reactor-netty 1.1.x is built against 4.1. A 4.2
+      # bump landed once and had to be reverted.
+      - dependency-name: "io.netty:netty-bom"
+        versions: [ ">=4.2.0" ]
 
   - package-ecosystem: "github-actions"
     directory: "/"

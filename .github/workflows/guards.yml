@@ -14,6 +14,13 @@ on:
 permissions:
   contents: read
 
+# Same key as maven.yml — see its comment. Safe for a guard: whichever run survives examines the
+# same commits, and a cancelled required check blocks rather than passes. Master is never
+# cancelled, so a guard always completes on the release line.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 # GitHub's implicit shell is `bash -e`, with no pipefail. Every guard here reads git through
 # pipelines, so that default would let a failing stage pass as success.
 defaults:
@@ -21,6 +28,7 @@ defaults:
     shell: bash
 
 jobs:
+  # Kept in its own job so a gitleaks failure is isolated in the checks list.
   secrets:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
@@ -36,15 +44,18 @@ jobs:
             zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             detect --source /repo --redact --verbose
 
-  emails:
-    name: No unlisted email addresses
+  # Two checks, one runner: both are seconds of work behind a checkout, and runner startup
+  # dominated when they had a job each.
+  policy:
+    name: No unlisted addresses, no private material
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0          # authorship and diffs need history, not just the worktree
-      # New commits only. Auditing all history would fail on pre-guard commits and tempt a
-      # rewrite that unpublishes nothing. Allowlist: .github/allowed-emails.txt.
+      # New commits only: auditing all history would fail on pre-guard commits and tempt a rewrite
+      # that unpublishes nothing. gitleaks above cannot replace this — it scans patch content only,
+      # so commit messages and author/committer identity are invisible to it.
       - name: Fail on email addresses not in the allowlist
         env:
           PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -56,11 +67,6 @@ jobs:
 
           ./.github/scripts/check-emails.sh range "${scan_range}"
 
-  private-paths:
-    name: No private material tracked
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The risk is licensed third-party source, not only credentials. .gitignore is the
       # primary guard; this is the backstop if an ignore is ever weakened.
       - name: Fail if private material is tracked
@@ -74,15 +80,3 @@ jobs:
           fi
 
           echo "clean — no private paths tracked"
-
-  release-wiring:
-    name: Release-wiring guard still works
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The guard itself runs only on a release dispatch, which may be months away, so nothing
-      # would notice a refactor that disarmed it until the one run where it is load-bearing.
-      # They exercise it against synthetic reactors rather than this one, because a healthy
-      # reactor cannot produce the failures the guard exists to catch.
-      - name: Run the release-wiring controls
-        run: ./.github/scripts/verify-release-wiring-controls.sh

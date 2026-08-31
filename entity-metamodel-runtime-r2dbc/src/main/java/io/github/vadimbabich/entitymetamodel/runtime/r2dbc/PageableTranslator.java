@@ -3,19 +3,24 @@ package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import io.github.vadimbabich.entitymetamodel.runtime.PropertyRef;
 import io.github.vadimbabich.entitymetamodel.runtime.SortOrder;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.OptionalLong;
+
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.relational.core.mapping.RelationalMappingContext;
 
 /**
- * Turns a {@code Pageable} into the owned description. Sort terms name properties as text, since
- * that is how a web request arrives, and resolve against the <em>selected</em> instance — a text
- * name cannot say which side of a join it means.
+ * Turns a {@code Pageable} into the owned description, resolving sort terms against the selected
+ * instance — a name arriving as text cannot say which side of a join it means.
  */
 final class PageableTranslator {
+
+  private static final long WITHOUT_A_PROBE_ROW = 0L;
+  private static final long WITH_A_PROBE_ROW = 1L;
 
   private final PropertyNameResolver propertyNames;
 
@@ -24,24 +29,46 @@ final class PageableTranslator {
   }
 
   <E> FluentSelect<E> applyTo(FluentSelect<E> select, Pageable pageable) {
+    return applySortAndWindow(select, pageable, WITHOUT_A_PROBE_ROW).select();
+  }
+
+  /**
+   * The same window with one row beyond it: whether that row comes back is the whole answer to
+   * "is there another page", which is what lets a caller report one without counting.
+   */
+  <E> ProbedWindow<E> applyToWithProbeRow(FluentSelect<E> select, Pageable pageable) {
+    return applySortAndWindow(select, pageable, WITH_A_PROBE_ROW);
+  }
+
+  private <E> ProbedWindow<E> applySortAndWindow(
+      FluentSelect<E> select, Pageable pageable, long probeRows) {
+
     Objects.requireNonNull(select, "select");
     Objects.requireNonNull(pageable, "pageable");
 
     FluentSelect<E> sorted = applySort(select, pageable.getSort());
 
     if (pageable.isUnpaged()) {
-      // No window from the request, so the description's own stands.
-      return sorted;
+      // Nothing below may be hoisted above this branch: an unpaged request has no page size, and
+      // asking for one throws.
+      return new ProbedWindow<>(sorted, OptionalLong.empty());
     }
 
     rejectWindowCollision(select);
 
-    return sorted.limit(pageable.getPageSize()).offset(pageable.getOffset());
+    // In long arithmetic because Integer.MAX_VALUE is a legal page size: in int arithmetic the
+    // probe row wraps it to a negative limit, which the description then refuses outright.
+    long rowsPerPage = pageable.getPageSize();
+    long windowedRows = rowsPerPage + probeRows;
+
+    FluentSelect<E> windowed = sorted.limit(windowedRows).offset(pageable.getOffset());
+
+    return new ProbedWindow<>(windowed, OptionalLong.of(rowsPerPage));
   }
 
   // Two windows over one statement. Overwriting loses a deliberate cap silently, and in the offset
-  // direction returns exactly the rows the description said to skip. Composing them would also need
-  // the total to respect the description's bound, which is a decision rather than a fix.
+  // direction returns exactly the rows the description said to skip; composing them is a decision
+  // rather than a fix.
   private void rejectWindowCollision(FluentSelect<?> select) {
     if (select.limit().isPresent()) {
       throw twoWindows("limit", select.limit().getAsLong());
@@ -102,4 +129,7 @@ final class PageableTranslator {
               + " ExpressionSort, or leave the dialect's own null ordering in place");
     }
   }
+
+  /** A windowed description and the rows one page of it holds; empty when unpaged. */
+  record ProbedWindow<E>(FluentSelect<E> select, OptionalLong rowsPerPage) {}
 }

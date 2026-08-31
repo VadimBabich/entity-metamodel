@@ -173,8 +173,10 @@ runs `mvn -B verify` on JDK 17, 21 and 25.
 `mvn -B verify` runs the unit tests plus the r2dbc integration suite, which executes against a real
 PostgreSQL in Testcontainers. `ContractCorpusParityTest` compiles the contract corpus's sources and
 byte-compares the processor's output against
-`entity-metamodel-processor/src/test/resources/contract-corpus/expected/`. Tests are JUnit 5 +
-AssertJ + Mockito; extend the parity test when generated output changes.
+`entity-metamodel-processor/src/test/resources/contract-corpus/expected/`. `BomCoversTheReactorTest`
+holds the BOM to the artifacts the reactor actually publishes — a build test rather than a
+release-time guard, precisely so it runs on every push. Tests are JUnit 5 + AssertJ + Mockito;
+extend the parity test when generated output changes.
 
 1. Run IDE inspections on every file you changed (`mcp__idea__get_file_problems`, or
    `mcp__idea__lint_files` for a batch). Fix all errors, and all warnings unless you can state
@@ -192,3 +194,10 @@ AssertJ + Mockito; extend the parity test when generated output changes.
    IDE MCP unavailable only after an actual call has failed — then say so explicitly, fall back to
    `mvn -B verify` plus `mcp__ide__getDiagnostics`, and never report inspections as run when they
    were not.
+
+**The commit itself is gated.** A `PreToolUse` hook runs `.github/scripts/branch-ready.sh` before
+any `git commit` and refuses the commit when a forced add staged an ignored file, when
+`shellcheck -S style` fails on a staged script, or when staged code is newer than the last test
+run. It *reports* — never blocks — a staged golden corpus and code changing with no front-door
+document, because only a person can say whether a capability moved. Steps 1 and 3 are the two it
+cannot check for you.

@@ -26,9 +26,9 @@
       <version>${project.version}</version>
     </dependency>
 
-    <!-- Test scope only, in both cases: the fixtures the processor is compiled against carry
-         Spring's mapping annotations, and their generated metamodels are compiled against the
-         runtime jar to prove the emitted source is real, not merely byte-equal. -->
+    <!-- Test scope only, in both cases: the processor's fixtures carry Spring's mapping
+         annotations, and their generated metamodels are compiled against the runtime jar to prove
+         the emitted source is real, not merely byte-equal. -->
     <dependency>
       <groupId>io.github.vadimbabich</groupId>
       <artifactId>entity-metamodel-runtime</artifactId>
@@ -64,13 +64,8 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
         <configuration>
-          <release>${java.release}</release>
-          <compilerArgs>
-            <arg>-Xlint:all</arg>
-          </compilerArgs>
-          <failOnWarning>true</failOnWarning>
-          <!-- This module's own sources must not be run through any processor found on the
-               classpath, including this one. -->
+          <!-- This module's own sources must not be run through any processor on the classpath,
+               including this one. -->
           <proc>none</proc>
         </configuration>
       </plugin>
@@ -79,9 +74,9 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <configuration>
-          <!-- The tests run javac in-process. Surefire's manifest-only jar hides the real
-               classpath from the compiler, so fixtures would fail to resolve Spring and the
-               runtime jar. -->
+          <!-- The tests run javac in-process, and Surefire's manifest-only jar hides the real
+               classpath from the compiler: fixtures would fail to resolve Spring and the runtime
+               jar. -->
           <useManifestOnlyJar>false</useManifestOnlyJar>
         </configuration>
       </plugin>

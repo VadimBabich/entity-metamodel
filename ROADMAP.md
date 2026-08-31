@@ -1,6 +1,6 @@
 # Roadmap
 
-As of 2026-08-30. Updated when direction changes, reviewed at least once per release cycle.
+As of 2026-08-31. Updated when direction changes, reviewed at least once per release cycle.
 
 ## Where the project is
 
@@ -20,8 +20,10 @@ release is freeze and packaging work, not core function:
 - **Annotation processor** — build-tool-neutral generation (Maven, Gradle, IDE builds),
   incremental-compilation aware. *Built, generating the frozen shape.*
 - **Fluent query surface** — typed, composable `SELECT` construction over Spring Data R2DBC,
-  including joins, driven by the generated metamodel. *Built (`entity-metamodel-runtime-r2dbc`),
-  executing against a real PostgreSQL in its integration suite.*
+  including joins, driven by the generated metamodel. Paging covers `Page` and the count-free
+  `Slice`; keyset (cursor) scrolling is deliberately not built, and the README's query recipes carry
+  the answer that serves it meanwhile. *Built (`entity-metamodel-runtime-r2dbc`), executing against
+  a real PostgreSQL in its integration suite.*
 - **BOM** — one aligned version for the whole family. *Built.*
 
 Nothing is on Maven Central yet, deliberately: the first release there will be a version that

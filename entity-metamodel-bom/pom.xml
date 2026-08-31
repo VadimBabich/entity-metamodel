@@ -43,4 +43,68 @@
     </dependencies>
   </dependencyManagement>
 
+  <!-- A pom-packaging module with a test suite is deliberate: the test holds these hand-maintained
+       entries to exactly the artifacts the reactor publishes, and here the build exercises it on
+       every push and every JDK rather than at release time. pom packaging binds no compile or test
+       phase, so both goals are wired explicitly.
+
+       This POM deploys verbatim, so the published BOM carries the two test dependencies and this
+       build section. Accepted, not overlooked: <scope>import</scope> reads dependencyManagement and
+       nothing else, so an importing consumer resolves none of it, and stripping it would mean
+       generating the deployed POM. -->
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <version>${assertj-core.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>compile-reactor-wiring-tests</id>
+            <phase>test-compile</phase>
+            <goals>
+              <goal>testCompile</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <systemPropertyVariables>
+            <!-- The test reads its sibling modules' POMs, so it needs the reactor root as a
+                 fact rather than as an assumption about the working directory. -->
+            <reactor.root>${project.basedir}/..</reactor.root>
+          </systemPropertyVariables>
+        </configuration>
+        <executions>
+          <execution>
+            <id>run-reactor-wiring-tests</id>
+            <phase>test</phase>
+            <goals>
+              <goal>test</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
 </project>

@@ -43,14 +43,14 @@ null tests, column-to-column equality and negation, composed with `and`/`or` and
 construction so an `OR` cannot widen a match by re-associating; a mirror count that reuses the page's
 own conditions; two instances of one table hydrated from a single row, each from its own labels; a
 typed sort, a sort whose property arrives as text from a `Pageable`, and a raw-expression sort;
-`Page`, `list`, `one`, `first`, `count` and `exists` terminals returning cold publishers, with no
-scheduler, timeout, retry or transaction anywhere in the library. A `Criteria` an application already
-builds is accepted with its meaning intact — every comparator, groups nested to any depth, a chain
-folded under SQL precedence rather than left to right, and an empty selection, which matches nothing
-exactly as it does through the substrate's own template. Its references name properties rather than
-columns: a column name can be another property's name, so resolving one as the other would filter
-the wrong column with nothing to notice. A criteria that names a column is refused, and the refusal
-names the property to use instead.
+`Page`, `Slice`, `list`, `one`, `first`, `count` and `exists` terminals returning cold publishers,
+with no scheduler, timeout, retry or transaction anywhere in the library. A `Criteria` an
+application already builds is accepted with its meaning intact — every comparator, groups nested
+to any depth, a chain folded under SQL precedence rather than left to right, and an empty
+selection, which matches nothing exactly as it does through the substrate's own template. Its
+references name properties rather than columns: a column name can be another property's name, so
+resolving one as the other would filter the wrong column with nothing to notice. A criteria that
+names a column is refused, and the refusal names the property to use instead.
 
 One thing to know before joining: a join to a to-many side multiplies rows, so the selected entity
 comes back once per matching counterpart — a list carries duplicates and a page's total counts those
@@ -89,6 +89,25 @@ exception — it is request data, so a handler can map it to a bad-request respo
 total from the library rather than being assembled by hand — the content and the count run in
 sequence, which is what a shared connection inside a transaction requires and what a hand-rolled
 `zip` gets wrong. `distinct()` collapses whole selected rows, not what a mapper narrows them to.
+
+`slice` joins those terminals for the listing that never displays a total. It fetches one row beyond
+the requested page and reports a successor from whether that row arrived, so it issues **no count
+statement at all** — on a large table the count is frequently dearer than the page itself, and an
+infinite-scrolling listing never shows the total it paid for. It takes a mapper alongside the entity
+form exactly as `page` does. `Page` already extends `Slice`, so what this buys is the avoided
+statement rather than a new shape. The extra row is dropped before anything hydrates it, and it is
+one row beyond the page in `long` arithmetic, so the largest legal page size does not wrap the limit
+negative. An unpaged request comes back as a single slice reporting no successor: there is no next
+page to ask for, and unlike `page` there is no total to say otherwise — so a description carrying
+its own limit answers "no successor" while rows remain behind it. Rows, not entities, exactly as for
+a page: a to-many join multiplies both the page and the row that probes past it.
+
+`page` now counts only where the page cannot imply the total. A first page that did not fill, and a
+non-empty partial page past the beginning, both determine the total from the rows in hand, so those
+requests issue one statement where they used to issue two. An empty page past the beginning still
+counts: coming back empty says the offset overshot, not by how much. An unpaged request over a
+description carrying its own limit or offset still counts, because the rows it left behind are not
+in hand to be counted.
 
 A row can also be read back as a projection rather than as a whole entity: `readProjection` takes a
 closed interface whose accessors name the instance's properties, or a DTO, so a listing can carry

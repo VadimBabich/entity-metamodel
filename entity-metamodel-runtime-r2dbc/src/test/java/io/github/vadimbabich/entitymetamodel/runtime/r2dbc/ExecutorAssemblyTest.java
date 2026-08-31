@@ -16,6 +16,7 @@ import org.reactivestreams.Publisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.r2dbc.convert.MappingR2dbcConverter;
 import org.springframework.data.r2dbc.dialect.PostgresDialect;
@@ -31,6 +32,7 @@ import reactor.test.StepVerifier;
 class ExecutorAssemblyTest {
 
   private static final EntityRef<Account> ACCOUNT = EntityRef.of(Account.class);
+  private static final EntityRef<Person> PERSON = EntityRef.of(Person.class);
   private static final R2dbcMappingContext MAPPING_CONTEXT = new R2dbcMappingContext();
 
   private final RefusingConnectionFactory connectionFactory = new RefusingConnectionFactory();
@@ -78,7 +80,7 @@ class ExecutorAssemblyTest {
 
   @Test
   void onlyTheTerminalsThatHydrateRefuseAnEmbeddedBearingEntity() {
-    FluentSelect<Person> people = FluentSelect.from(EntityRef.of(Person.class));
+    FluentSelect<Person> people = FluentSelect.from(PERSON);
 
     // The refusal exists because hydration would drop the embedded value silently; counting and
     // probing hydrate nothing.
@@ -88,15 +90,35 @@ class ExecutorAssemblyTest {
     assertThatExceptionOfType(IllegalArgumentException.class)
         .isThrownBy(() -> executor.all(people))
         .withMessageContaining("embedded");
+
+    // page and slice hydrate as well, so they refuse too — but they take request data, which puts
+    // the refusal in the publisher rather than in a throw.
+    assertThatNoException().isThrownBy(() -> executor.page(people, PageRequest.of(0, 10)));
+    assertThatNoException().isThrownBy(() -> executor.slice(people, PageRequest.of(0, 10)));
   }
 
   @Test
   void pageReportsTheSameRefusalThroughThePublisherRatherThanByThrowing() {
-    // page() takes request data, so it has one failure channel where the others have two. Pinned in
-    // both directions: this description throws from all() and signals from page().
-    FluentSelect<Person> people = FluentSelect.from(EntityRef.of(Person.class));
+    // The same description throws from all() and signals from page().
+    FluentSelect<Person> people = FluentSelect.from(PERSON);
 
     StepVerifier.create(executor.page(people, PageRequest.of(0, 10)))
+        .expectError(IllegalArgumentException.class)
+        .verify();
+    StepVerifier.create(executor.page(people, PageRequest.of(0, 10), row -> row.read(PERSON)))
+        .expectError(IllegalArgumentException.class)
+        .verify();
+  }
+
+  @Test
+  void sliceReportsTheSameRefusalThroughThePublisherRatherThanByThrowing() {
+    FluentSelect<Person> people = FluentSelect.from(PERSON);
+
+    StepVerifier.create(executor.slice(people, PageRequest.of(0, 10)))
+        .expectError(IllegalArgumentException.class)
+        .verify();
+    StepVerifier.create(
+            executor.slice(people, PageRequest.of(0, 10), row -> row.read(PERSON)))
         .expectError(IllegalArgumentException.class)
         .verify();
   }
@@ -111,7 +133,7 @@ class ExecutorAssemblyTest {
   }
 
   @Test
-  void aBadSortPropertyReachesTheCallerAsAnErrorSignalRatherThanAThrow() {
+  void aPageReportsABadSortPropertyThroughThePublisherRatherThanByThrowing() {
     // A page request's sort property is data, not a programmer's ref, so the reactive rules put it
     // in the publisher: a handler mapping it to 400 never sees a synchronous throw.
     Mono<Page<Account>> page =
@@ -162,6 +184,82 @@ class ExecutorAssemblyTest {
             () -> executor.page(FluentSelect.from(ACCOUNT), null, row -> row.read(ACCOUNT)));
     assertThatNullPointerException()
         .isThrownBy(() -> executor.page(FluentSelect.from(ACCOUNT), PageRequest.of(0, 10), null));
+  }
+
+  @Test
+  void aSliceIsAlsoJustADescriptionUntilSomethingSubscribes() {
+    Mono<Slice<Account>> unsubscribedSlice =
+        executor.slice(FluentSelect.from(ACCOUNT), PageRequest.of(0, 20));
+
+    assertThat(unsubscribedSlice).isInstanceOf(Publisher.class);
+    assertThat(connectionFactory.connectionsRequested).isZero();
+  }
+
+  @Test
+  void aMappedSliceIsAlsoJustADescriptionUntilSomethingSubscribes() {
+    Mono<Slice<String>> unsubscribedSlice =
+        executor.slice(
+            FluentSelect.from(ACCOUNT),
+            PageRequest.of(0, 20),
+            row -> row.read(ACCOUNT).ownerEmail);
+
+    assertThat(unsubscribedSlice).isInstanceOf(Publisher.class);
+    assertThat(connectionFactory.connectionsRequested).isZero();
+  }
+
+  @Test
+  void aSliceReportsABadSortPropertyThroughThePublisherRatherThanByThrowing() {
+    Mono<Slice<Account>> slice =
+        executor.slice(FluentSelect.from(ACCOUNT), PageRequest.of(0, 10, Sort.by("nickname")));
+
+    StepVerifier.create(slice).expectError(IllegalArgumentException.class).verify();
+    assertThat(connectionFactory.connectionsRequested).isZero();
+  }
+
+  @Test
+  void aMappedSliceReportsABadSortPropertyThroughThePublisherRatherThanByThrowing() {
+    Mono<Slice<String>> slice =
+        executor.slice(
+            FluentSelect.from(ACCOUNT),
+            PageRequest.of(0, 10, Sort.by("nickname")),
+            row -> row.read(ACCOUNT).ownerEmail);
+
+    StepVerifier.create(slice).expectError(IllegalArgumentException.class).verify();
+    assertThat(connectionFactory.connectionsRequested).isZero();
+  }
+
+  @Test
+  void aSliceRejectsAMissingDescriptionOrRequest() {
+    assertThatNullPointerException().isThrownBy(() -> executor.slice(null, Pageable.unpaged()));
+    assertThatNullPointerException()
+        .isThrownBy(() -> executor.slice(FluentSelect.from(ACCOUNT), null));
+  }
+
+  @Test
+  void aMappedSliceRejectsAMissingDescriptionRequestOrMapper() {
+    assertThatNullPointerException()
+        .isThrownBy(() -> executor.slice(null, Pageable.unpaged(), row -> row.read(ACCOUNT)));
+    assertThatNullPointerException()
+        .isThrownBy(
+            () -> executor.slice(FluentSelect.from(ACCOUNT), null, row -> row.read(ACCOUNT)));
+    assertThatNullPointerException()
+        .isThrownBy(() -> executor.slice(FluentSelect.from(ACCOUNT), PageRequest.of(0, 10), null));
+  }
+
+  @Test
+  void aWindowCollisionReachesTheCallerAsASignalThroughEitherPagingTerminal() {
+    // The translator throws, but it runs inside the terminal's defer, so the caller sees a signal.
+    // Both terminals, because a new entry point that forgot rejectWindowCollision would
+    // double-window silently.
+    FluentSelect<Account> boundedAlready = FluentSelect.from(ACCOUNT).limit(500);
+
+    StepVerifier.create(executor.page(boundedAlready, PageRequest.of(0, 10)))
+        .expectError(IllegalArgumentException.class)
+        .verify();
+    StepVerifier.create(executor.slice(boundedAlready, PageRequest.of(0, 10)))
+        .expectError(IllegalArgumentException.class)
+        .verify();
+    assertThat(connectionFactory.connectionsRequested).isZero();
   }
 
   @Test

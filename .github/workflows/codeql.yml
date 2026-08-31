@@ -13,6 +13,12 @@ on:
 permissions:
   contents: read
 
+# Same key as maven.yml — see its comment. Master is never cancelled, so the alerts on the
+# release line always come from a completed analysis.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 jobs:
   analyze:
     name: CodeQL analysis (java)
@@ -27,8 +33,8 @@ jobs:
         uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           languages: java-kotlin
-          # No build step needed: CodeQL's buildless mode for Java scans the sources
-          # directly, keeping this workflow independent of the Maven matrix.
+          # Buildless mode scans the sources directly, keeping this workflow independent of the
+          # Maven matrix.
           build-mode: none
 
       - name: Perform CodeQL analysis

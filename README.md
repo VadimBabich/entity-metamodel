@@ -3,16 +3,16 @@
 Generate a metamodel from your Spring Data entities while they compile, then build R2DBC
 queries — joins included — that the compiler checks.
 
-> **Nothing is on Maven Central yet.** There is no artifact there to depend on: you build it
-> from source, and the public API can still change. Everything below runs today and is held by
-> tests on every build. [Where it's going](#where-its-going) has the bar for a first release.
+> **Nothing is on Maven Central yet.** There is no artifact there to depend on: you build it from
+> source, and the public API can still change. Everything below runs today and is held by tests on
+> every build. [Where it's going](#where-its-going) has the bar for a first release.
 
 ## The problem
 
 Spring Data R2DBC takes property and column names as strings:
 
 ```text
-Criteria.where("usat_value").is(value);
+Criteria.where("ownerEmail").is(email);
 ```
 
 The compiler cannot see that string. Rename the field, change the `@Column`, delete the property —
@@ -21,10 +21,10 @@ exercised locally. Grep is the only refactoring tool that works, and it misses t
 assembled by concatenation.
 
 The second cost is joins. Spring's SQL DSL can express them, but the fluent `Query`/`Criteria` API
-has no join vocabulary, so every repository that touches two tables hand-assembles the same
-ceremony: aliased table handles, comparisons built from string lookups, bind markers threaded
-through `ON` clauses, per-entity column lists, and manual row de-multiplexing. Codebases grow an
-in-house layer whose whole job is carrying that state around.
+has no join vocabulary, so every repository touching two tables hand-assembles the same ceremony:
+aliased table handles, comparisons built from string lookups, bind markers threaded through `ON`
+clauses, per-entity column lists, manual row de-multiplexing. Codebases grow an in-house layer whose
+whole job is carrying that state around.
 
 Both have one fix: derive the references from the entities during the build, and give joins a
 vocabulary that carries types. A rename then breaks compilation, which is where you want to hear
@@ -32,9 +32,9 @@ about it.
 
 ## What it does differently
 
-Hand-written constant classes solve the first half and rot quietly — nothing keeps them in step
-with the entity. Runtime introspection stays in step but moves the error back to runtime, which is
-the problem you started with.
+Hand-written constant classes solve the first half and rot quietly — nothing keeps them in step with
+the entity. Runtime introspection stays in step but moves the error back to runtime, which is the
+problem you started with.
 
 This participates in compilation instead:
 
@@ -47,8 +47,8 @@ This participates in compilation instead:
 - **Ordinary code.** Generated files are plain `.java` on your compile path. Ctrl-click reaches the
   declaration, find-usages works, the debugger steps through them.
 - **Deterministic.** Regenerating over unchanged sources is byte-identical — no dates, no
-  environment-dependent content — and each generator is pinned by a committed corpus of expected
-  files, so output cannot drift without a visible diff.
+  environment-dependent content — and the output is pinned by a committed corpus of expected files,
+  so it cannot drift without a visible diff.
 
 ## Five minutes
 
@@ -117,8 +117,8 @@ MetamodelQueryExecutor metamodelQueryExecutor(
 }
 ```
 
-Renderer and converter must share one mapping context: one names a column when projecting it and
-the other when reading it back, so two contexts produce rows nothing claims.
+Renderer and converter must share one mapping context: one names a column when projecting it and the
+other when reading it back, so two contexts produce rows nothing claims.
 
 ## Core ideas
 
@@ -126,10 +126,10 @@ the other when reading it back, so two contexts produce rows nothing claims.
   the JSR-269 case. Participating in the compile buys resolved types, inheritance, incremental
   builds and Maven + Gradle + IDE support from one artifact — no build-tool plugin to maintain.
 - **A description is a value.** `FluentSelect` is immutable and performs no I/O; rendering it is a
-  pure function. The library never schedules, times out, retries, caches or opens a transaction,
-  and no Spring SQL type appears in a public signature — those decisions stay yours.
+  pure function. The library never schedules, times out, retries, caches or opens a transaction, and
+  no Spring SQL type appears in a public signature — those decisions stay yours.
 - **A closed algebra.** The query surface was derived from measured usage in real codebases and
-  stops where full SQL begins — it does not wrap your repositories, replace your converters or ask
+  stops where full SQL begins. It does not wrap your repositories, replace your converters or ask
   you to adopt a query language. That boundary is what keeps it small enough to be correct.
 
 ## What it supports
@@ -142,33 +142,37 @@ the other when reading it back, so two contexts produce rows nothing claims.
 - Inherited members flattened into the concrete entity and re-anchored there; nested `@Table` types
   mirrored as nested metamodels.
 - Exact declared types — generics, arrays, bounded wildcards — carried into the ref type arguments.
-- Members ordered by name, so output does not depend on the compiler. Held byte-for-byte against a
+- Members ordered by name, so output does not depend on the compiler. Held byte-for-byte against the
   committed corpus on JDK 17, 21 and 25.
 - Registered *isolating*: editing one entity regenerates one metamodel. Measured end to end on
   Gradle 9.4.1, including a rename of a private field on a mapped supertype.
 
-**Queries** — `entity-metamodel-runtime-r2dbc`, every item below exercised against a real
-PostgreSQL 16 in the integration suite:
+**Queries** — `entity-metamodel-runtime-r2dbc`, every item below exercised against a real PostgreSQL
+16 in the integration suite:
 
 - Inner and left-outer joins, from a `JoinRef` or from an `ON` condition you state, binds included.
-  The same table can join several times under distinct instances, both hydrated from one row.
+  One table can join several times under distinct instances, all hydrated from one row.
 - Typed filters — equality, ranges, `IN`, `LIKE`, null tests, column-to-column comparison,
   negation — composed with `and`/`or` and parenthesised by construction, so an `OR` cannot widen a
   match by re-associating.
 - `distinct()`, for the row multiplication a to-many join causes. The total and the paging probe
   keep their meaning rather than being approximated.
-- A `Criteria` your application already builds, accepted unchanged through `CriteriaAdapter`,
+- `page`, `slice`, `list`, `one`, `first`, `count` and `exists`, all returning cold publishers.
+- Count elision: a page counts only where the rows in hand cannot imply the total. `slice` never
+  counts at all — it fetches one row past the page and reports a successor from whether that row
+  arrived, which is what an infinite-scrolling listing actually needs.
+- `Pageable` translation, including a sort property that arrives as text from a web request.
+- A `Criteria` your application already builds, accepted unchanged through `CriteriaAdapter` with
   nested groups and SQL precedence intact — so adopting this is not a rewrite of your filter code.
   An integration test holds its rows equal to Spring's own template across a matrix of filters.
-- `Pageable` translation, including a sort property that arrives as text.
-- `page`, `list`, `one`, `first`, `count` and `exists`, all returning cold publishers.
 - Projections: `readProjection` takes a closed interface or a DTO, so a listing can carry two
-  columns of a joined table. A DTO reads only the properties it declares; a closed interface reads
-  and converts every property of the instance and narrows only the object handed back. `page` and
-  `all` both take a mapper, so a projected listing keeps its total without hand-assembly.
+  columns of a joined table. `page`, `slice` and `all` all take a mapper, so a projected listing
+  needs no hand-assembly.
 - A raw-SQL door for what the vocabulary cannot say, where `{0}` names either a bind value or a
   property whose column the library writes. Numbered rather than `?`, so a fragment can still use
   PostgreSQL's jsonb `?`, `?|` and `?&` operators.
+
+[`CHANGELOG.md`](CHANGELOG.md) carries the same list in detail, with the reasoning behind each rule.
 
 ## What it deliberately doesn't do
 
@@ -184,15 +188,15 @@ PostgreSQL 16 in the integration suite:
   compiler does not present types carrying a stereotype composed over it, though such a type *is*
   recognised once another entity refers to it.
 - **Only part of Spring's read machinery applies,** because rows are materialised from their own
-  columns rather than through an entity template. Property-level reading converters work on both
-  doors. An entity-level `Converter<RowDocument, T>` applies to a whole-entity read but not to a
-  projection — projecting such an entity is refused rather than quietly bypassing it, which is a
-  deliberate difference from Spring's own template, where the same projection succeeds and hands
-  back the unconverted value. An entity-level `Converter<Row, T>` and `AfterConvertCallback` never
-  fire at all. Post-read logic belongs in the mapper the executor takes.
+  columns rather than through an entity template. Property-level reading converters work everywhere.
+  An entity-level `Converter<RowDocument, T>` applies to a whole-entity read but not to a
+  projection, and projecting such an entity is refused rather than quietly bypassing it — a
+  deliberate difference from Spring's template, where the same projection succeeds and hands back
+  the unconverted value. An entity-level `Converter<Row, T>` and `AfterConvertCallback` never fire
+  at all. Post-read logic belongs in the mapper the executor takes.
 - **Projections are checked one way only.** An interface projection is checked against the entity
-  and an open `@Value` one is refused; a DTO is bound by Spring itself and passed through
-  unchecked, so a stale field there reads null.
+  and an open `@Value` one is refused; a DTO is bound by Spring itself and passed through unchecked,
+  so a stale field there reads null.
 - **One dialect is exercised end to end.** Rendering goes through Spring's own dialect machinery,
   but only PostgreSQL is tested.
 - **Across a module boundary, Gradle will not regenerate.** Editing a mapped supertype in another
@@ -200,6 +204,115 @@ PostgreSQL 16 in the integration suite:
   that columns resolve at use: a renamed property throws from `PropertyRef.columnName` rather than
   querying the wrong column.
 - **No compatibility promise yet.** Signatures can still change until the API freeze.
+
+## Compared with the alternatives
+
+Every option here solves a real problem. The question is whose, and what it couples you to.
+
+| | Hand-written constants | Spring Data alone | QueryDSL | jOOQ | entity-metamodel |
+|---|---|---|---|---|---|
+| Rename-safe references | no | no | yes | yes | **yes** |
+| Typed joins | n/a | no | yes (JDBC) | yes | **yes** |
+| Reactive R2DBC execution | n/a | yes | no first-party | yes | **yes** |
+| Metamodel derived from | you | — | entities | database schema | **your entities** |
+| Shares Spring Data's mapping context | yes | yes | no | no | **yes** |
+| Full SQL: aggregates, unions, windows, DML | — | no | yes | **yes** | no — deliberate |
+
+Two differences do most of the work. QueryDSL's SQL module executes over JDBC, so a reactive
+codebase gets no first-party executor; upstream has also been quiet since 5.1.0 in January 2024,
+with maintenance continuing in a community fork. jOOQ is the strongest alternative and is
+schema-first: its metamodel comes from the database, so alongside Spring Data your column names,
+converters and entity mapping live in two systems that nothing keeps consistent. If your queries
+need aggregation, set operations or window functions as a matter of course, jOOQ is the right tool —
+and the two coexist without conflict, precisely because this one stops where full SQL begins.
+
+## Query recipes
+
+The answers this library gives in place of a feature. The SQL each one renders is pinned by
+`DocumentedRecipeRenderingTest`, `PageableTranslationTest` and `SortAndPaginationRenderingTest`, and
+the keyset traversals are walked against PostgreSQL in the integration suite, so a published recipe
+cannot quietly stop working.
+
+**Is there another page, without counting.** Where you are fetching the page anyway, `slice` is the
+answer — it asks for one row beyond the page and issues no count statement at all:
+
+```java
+Mono<Slice<Membership>> slice = executor.slice(byOwner, PageRequest.of(0, 20));
+```
+
+Where you are *not* fetching the page — a "load more" control that only needs enabling — the probe
+is cheaper still, because the description's own offset is honoured. The offset is the end of the
+page you are showing, so for the first page of twenty it is twenty:
+
+```java
+Mono<Boolean> more = executor.exists(byOwner.offset(20));
+```
+
+**Keyset (cursor) pagination.** There is no keyset terminal, and both predicate forms are
+expressible today with no library change. The metamodel supplies the qualified column names either
+way, so neither spells out a table alias and neither carries an injection exposure.
+
+Prefer the row-value form wherever the sort runs one direction throughout — it is the only one of
+the two that PostgreSQL turns into an index seek. **The comparison inverts with the sort:** `>`
+walks an all-ascending sort, `<` an all-descending one.
+
+```java
+// ORDER BY owner_email ASC, account_id ASC
+Condition after =
+    SqlExpr.raw("({0}, {1}) > ({2}, {3})", Account__.OWNER_EMAIL, Account__.ID,
+        cursorEmail, cursorId);
+
+// ORDER BY owner_email DESC, account_id DESC — the feed case
+Condition after =
+    SqlExpr.raw("({0}, {1}) < ({2}, {3})", Account__.OWNER_EMAIL, Account__.ID,
+        cursorEmail, cursorId);
+```
+
+Getting that operator wrong is silent: the SQL is valid, the plan still seeks, and the traversal
+re-serves the leading page for ever.
+
+The expanded form is the fallback for a mixed-direction sort, which the row-value form cannot
+express. It is correct and portable, and it is **not** free:
+
+```java
+Condition after = Account__.OWNER_EMAIL.gt(cursorEmail)
+    .or(Account__.OWNER_EMAIL.is(cursorEmail).and(Account__.ID.gt(cursorId)));
+```
+
+Both parenthesise correctly with a filter of your own on either side, and both traverse correctly —
+an integration test walks a tied leading key with each.
+
+One `EXPLAIN (ANALYZE, BUFFERS)` per form, on synthetic data you can rebuild: PostgreSQL 16, 200,000
+rows, ten rows per distinct leading key so that key is non-unique, a composite index on the two key
+columns, `ANALYZE`, page size 20, cursor at the 90th percentile **of the index order**.
+
+| | row-value | expanded |
+|---|---|---|
+| how the planner uses the predicate | `Index Cond` — seeks to the cursor | `Filter` — scans from the start and discards |
+| rows discarded to fill one page | 0 | 180,001 |
+| buffers | 5 | 6,190 |
+| execution | 0.05 ms | 14.47 ms |
+
+The gap grows with depth — a sweep over the same data timed the expanded form at 1.9 / 9.3 / 16.1 ms
+at the 10th, 50th and 90th percentile, while the row-value form stayed flat at ~0.03 ms. **The
+expanded form uses the index for ordering only, so it reproduces the deep-page degradation keyset
+pagination exists to remove.** The timings are point-in-time and the build does not re-check them;
+the plan shapes are the durable part. If your sort is mixed-direction and your pages go deep,
+reversing the whole sort to make it uniform is usually the better trade.
+
+What the library cannot check here, and you must:
+
+- **The sort has to end in a unique key** — the entity's `@Id` is the usual one. Without it the
+  traversal skips or repeats rows, and no error says so.
+- **Every sort property must be projected**, and the key values must match the sort in arity, order
+  and type.
+- **No null sort keys.** Both forms evaluate to NULL where a key is NULL, so those rows drop out of
+  the traversal silently.
+- **The row-value form needs one direction throughout, and its operator has to match that
+  direction.** A mixed-direction sort such as `createdAt DESC, id ASC` is what neither operator can
+  express, so that one needs the expanded form — at the cost measured above.
+- **Not over a to-many join,** where one root id no longer identifies one row. Add `distinct()` and
+  the joined instance's id to the key, or key on a description that does not join.
 
 ## Requirements and installation
 
@@ -263,7 +376,7 @@ dependencies {
 }
 ```
 
-If you want the metamodel and its typed references without query execution, depend on
+For the metamodel and its typed references without query execution, depend on
 `entity-metamodel-runtime` instead. `entity-metamodel-bom` aligns the whole family on one version.
 
 ## IDE
@@ -288,33 +401,17 @@ delegated Maven or Gradle build is the reliable path today.
 | A `Pageable` sort is rejected | the sort names a property the entity does not persist | it arrives as an error signal on the publisher, not a thrown exception — map it to a bad request |
 | A `Criteria` is refused, naming a property | it used a column name; a column name can be another property's name, so resolving it would filter the wrong column | use the property name the message gives |
 
-## Compared with the alternatives
-
-Every option here solves a real problem. The question is whose, and what it couples you to.
-
-| | Hand-written constants | Spring Data alone | QueryDSL | jOOQ | entity-metamodel |
-|---|---|---|---|---|---|
-| Rename-safe references | no | no | yes | yes | **yes** |
-| Typed joins | n/a | no | yes (JDBC) | yes | **yes** |
-| Reactive R2DBC execution | n/a | yes | no first-party | yes | **yes** |
-| Metamodel derived from | you | — | entities | database schema | **your entities** |
-| Shares Spring Data's mapping context | yes | yes | no | no | **yes** |
-| Full SQL: aggregates, unions, windows, DML | — | no | yes | **yes** | no — deliberate |
-
-Two differences do most of the work. QueryDSL's SQL module executes over JDBC, so a reactive
-codebase gets no first-party executor; upstream has also been quiet since 5.1.0 in January 2024,
-with maintenance continuing in a community fork. jOOQ is the strongest alternative and is
-schema-first: its metamodel comes from the database, so alongside Spring Data your column names,
-converters and entity mapping live in two systems that nothing keeps consistent. If your queries
-need aggregation, set operations or window functions as a matter of course, jOOQ is the right tool,
-and the two coexist without conflict — precisely because this one stops where full SQL begins.
-
 ## Where it's going
 
 **Nothing goes to Maven Central until it is whole.** Maven Central is permanent, so the first
-release will be a version you can run end to end — generate a metamodel, build a query, execute
-it — rather than a milestone of parts. What stands between here and that release is freeze and
-packaging work rather than core function; API compatibility gating is the next station.
+release will be a version you can run end to end — generate a metamodel, build a query, execute it —
+rather than a milestone of parts. What stands between here and that release is freeze and packaging
+work rather than core function; API compatibility gating is the next station.
+
+When it does ship, each release is cut by a dispatch-only workflow that signs the artifacts,
+attaches their CycloneDX SBOMs to the GitHub release, and attests build provenance — so a jar
+obtained from Maven Central can be checked against the exact workflow run and commit that built it:
+`gh attestation verify <jar> --repo VadimBabich/entity-metamodel`.
 
 The 1.x Maven plugin that preceded this one was retired and removed from the repository on
 2026-08-30; it survives in git history and in its own tags. The generated shape it produced is not

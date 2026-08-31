@@ -5,27 +5,28 @@ import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
 import org.springframework.data.core.TypeInformation;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
+import org.springframework.data.domain.SliceImpl;
 import org.springframework.data.r2dbc.convert.R2dbcConverter;
+import org.springframework.data.support.ReactivePageableExecutionUtils;
 import org.springframework.r2dbc.core.DatabaseClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * Runs the statements a {@link FluentSelect} describes — the one collaborator a consumer wires
- * themselves, since the library registers no component and holds no static state.
+ * Runs the statements a {@link FluentSelect} describes. The library registers no component and
+ * holds no static state, so this is the one collaborator a consumer wires themselves.
  *
  * <p>Takes a {@link DatabaseClient} and {@link QueryRenderer} rather than an
  * {@code R2dbcEntityTemplate}, which exposes neither a bind-marker factory nor a typed mapping
  * context. Every terminal returns a cold publisher: no scheduling, timeout or retry.
- *
- * <p>Terminals live here rather than on the builder so that a description stays a pure value with
- * no executor in reach, which is how one description serves both a page and its count.
  */
 public final class MetamodelQueryExecutor {
 
@@ -34,8 +35,8 @@ public final class MetamodelQueryExecutor {
   private final R2dbcConverter converter;
   private final PageableTranslator pageableTranslator;
 
-  // A projection's shape depends only on the result type and the entity, so it is decided once
-  // and held for this executor's lifetime rather than rebuilt on every row.
+  // A projection's shape depends only on the result type and the entity, so it is resolved once
+  // rather than rebuilt on every row.
   private final ProjectionResolver projections;
 
   /**
@@ -60,13 +61,15 @@ public final class MetamodelQueryExecutor {
     return all(select, row -> row.read(selected));
   }
 
-  /**
-   * The mapper form, for a row carrying more than one instance.
-   */
+  /** The mapper form, for a row carrying more than one instance. */
   public <R> Flux<R> all(FluentSelect<?> select, Function<ProjectedRow, R> mapper) {
     Objects.requireNonNull(select, "select");
     Objects.requireNonNull(mapper, "mapper");
 
+    return projectedRows(select).map(mapper);
+  }
+
+  private Flux<ProjectedRow> projectedRows(FluentSelect<?> select) {
     RenderedStatement statement = renderer.render(select);
 
     return bind(statement)
@@ -74,9 +77,7 @@ public final class MetamodelQueryExecutor {
         .all()
         .map(
             projectedColumns ->
-                mapper.apply(
-                    new ProjectedRow(
-                        projectedColumns, converter, statement.aliases(), projections)));
+                new ProjectedRow(projectedColumns, converter, statement.aliases(), projections));
   }
 
   /**
@@ -106,18 +107,14 @@ public final class MetamodelQueryExecutor {
     return Mono.just(rows.get(0));
   }
 
-  /**
-   * The leading matching row — only defined if the description sorts.
-   */
+  /** The leading matching row — only defined if the description sorts. */
   public <E> Mono<E> first(FluentSelect<E> select) {
     Objects.requireNonNull(select, "select");
 
     return all(select.withAtMostOneRow()).next();
   }
 
-  /**
-   * Bound the description first: this holds the whole result in memory.
-   */
+  /** Bound the description first: this holds the whole result in memory. */
   public <E> Mono<List<E>> list(FluentSelect<E> select) {
     Objects.requireNonNull(select, "select");
 
@@ -135,9 +132,8 @@ public final class MetamodelQueryExecutor {
     RenderedStatement statement = renderer.renderCount(select);
 
     // By position, because the count column's name is the dialect's business; a null is a driver
-    // fault rather than a zero, since a count is never SQL NULL. first() rather than one(): a COUNT
-    // without GROUP BY returns one row by construction, while one() would reshape a binding fault
-    // into "returned non unique result" and hide the driver's real error.
+    // fault rather than a zero. first() rather than one(): a COUNT without GROUP BY returns one row
+    // by construction, and one() would reshape a binding fault into "non unique result".
     return bind(statement)
         .map(row -> Objects.requireNonNull(row.get(0, Long.class), "count value"))
         .first();
@@ -156,13 +152,16 @@ public final class MetamodelQueryExecutor {
   }
 
   /**
-   * One page of matching rows, with the total behind it at the cost of a second statement. The
-   * request's sort leads any the description carries, and a to-many join makes both the content and
-   * the total count rows rather than entities — unless the description is distinct, when both are
-   * its distinct rows ({@link FluentSelect#distinct()}).
+   * One page of matching rows with the total behind it. The count costs a second statement only
+   * where the rows in hand cannot imply the total, which includes an empty page past the beginning:
+   * it says the offset overshot, not by how much. Where the total is never displayed, prefer
+   * {@link #slice(FluentSelect, Pageable)}, which never counts at all.
    *
-   * <p>Only a missing argument throws; everything else — including a sort property the entity does
-   * not persist — arrives as an error signal.
+   * <p>The request's sort leads any the description carries, and a to-many join counts rows rather
+   * than entities unless the description is {@link FluentSelect#distinct()}.
+   *
+   * <p>Only a missing argument throws; a sort property the entity does not persist arrives as an
+   * error signal.
    */
   public <E> Mono<Page<E>> page(FluentSelect<E> select, Pageable pageable) {
     Objects.requireNonNull(select, "select");
@@ -174,14 +173,12 @@ public final class MetamodelQueryExecutor {
 
   /**
    * The mapper form, for a page whose rows carry more than one instance or are read back as
-   * projections. The sort, the total and the unpaged short-circuit behave as they do for entities.
+   * projections. Sort, total and count elision behave as they do for entities.
    *
    * <p>Sort terms resolve against the description's root instance, not against what the mapper
-   * reads — a name arriving as text cannot say which side of a join it means. A name the root does
-   * not persist arrives as an error signal; a name both tables persist orders by the root with
-   * nothing to notice. An {@code orderBy} on the description cannot correct that, since the
-   * request's terms lead and the description's follow as tiebreakers — root the description at the
-   * instance being listed instead.
+   * reads: a name both tables persist orders by the root with nothing to notice. An
+   * {@code orderBy} cannot correct that, since the request's terms lead — root the description at
+   * the instance being listed instead.
    */
   public <R> Mono<Page<R>> page(
       FluentSelect<?> select, Pageable pageable, Function<ProjectedRow, R> mapper) {
@@ -200,12 +197,87 @@ public final class MetamodelQueryExecutor {
         });
   }
 
+  /**
+   * One page of matching rows and whether another follows, without the count a page pays for: one
+   * row beyond the page is fetched, and its presence is the answer. {@code Page} already answers
+   * {@code hasNext()}, so what this buys is the avoided <em>statement</em>, not a new shape.
+   *
+   * <p>A to-many join matches once per counterpart, so a slice of a multiplied description holds
+   * duplicates unless it is {@link FluentSelect#distinct()}. An unpaged request is one slice
+   * reporting no successor, even where the description's own window left rows behind.
+   *
+   * <p>Only a missing argument throws; a sort property the entity does not persist arrives as an
+   * error signal.
+   */
+  public <E> Mono<Slice<E>> slice(FluentSelect<E> select, Pageable pageable) {
+    Objects.requireNonNull(select, "select");
+
+    EntityRef<E> selected = select.entity();
+
+    return slice(select, pageable, row -> row.read(selected));
+  }
+
+  /**
+   * The mapper form, for a slice whose rows carry more than one instance or are read back as
+   * projections. The row fetched to prove a successor is discarded before it reaches the mapper.
+   */
+  public <R> Mono<Slice<R>> slice(
+      FluentSelect<?> select, Pageable pageable, Function<ProjectedRow, R> mapper) {
+
+    Objects.requireNonNull(select, "select");
+    Objects.requireNonNull(pageable, "pageable");
+    Objects.requireNonNull(mapper, "mapper");
+
+    return Mono.defer(
+        () -> {
+          PageableTranslator.ProbedWindow<?> probedWindow =
+              pageableTranslator.applyToWithProbeRow(select, pageable);
+
+          if (probedWindow.rowsPerPage().isEmpty()) {
+            return all(probedWindow.select(), mapper)
+                .collectList()
+                .map(everyRow -> new SliceImpl<>(everyRow, pageable, false));
+          }
+
+          // From the window that was asked for, so the cut-off cannot drift from the probe row.
+          long rowsPerPage = probedWindow.rowsPerPage().getAsLong();
+
+          // Counted rather than collected: trimming a materialised list would hold the raw result
+          // set beside the mapped one, so the probe row is dropped as it streams. The counter sits
+          // inside the defer, so each subscription counts its own rows.
+          AtomicLong fetchedRows = new AtomicLong();
+
+          return projectedRows(probedWindow.select())
+              .filter(row -> fetchedRows.incrementAndGet() <= rowsPerPage)
+              .map(mapper)
+              .collectList()
+              .map(
+                  pageRows ->
+                      new SliceImpl<>(pageRows, pageable, fetchedRows.get() > rowsPerPage));
+        });
+  }
+
   private <R> Mono<Page<R>> pageOf(
       List<R> rows, FluentSelect<?> select, Pageable pageable) {
 
-    if (pageable.isUnpaged() && select.limit().isEmpty() && select.offset().isEmpty()) {
-      // Nothing was left behind, so the rows in hand are the total. A description with a window of
-      // its own does leave rows behind — an offset as much as a limit — so it takes the count.
+    if (pageable.isUnpaged()) {
+      return unpagedPageOf(rows, select, pageable);
+    }
+
+    // The substrate skips the count wherever the rows in hand already determine the total. Sound
+    // only because the request brought the window, which means rejectWindowCollision has already
+    // proved the description carries none of its own. Deferred because getPage does not subscribe
+    // the count on every branch, while count(select) renders its statement in its own body.
+    return ReactivePageableExecutionUtils.getPage(rows, pageable, Mono.defer(() -> count(select)));
+  }
+
+  // Not delegated: the substrate's unpaged branch reports the rows in hand as the total, which
+  // fabricates one whenever the description carries a window of its own — an offset as much as a
+  // limit.
+  private <R> Mono<Page<R>> unpagedPageOf(
+      List<R> rows, FluentSelect<?> select, Pageable pageable) {
+
+    if (select.limit().isEmpty() && select.offset().isEmpty()) {
       return Mono.just(new PageImpl<>(rows, pageable, rows.size()));
     }
 

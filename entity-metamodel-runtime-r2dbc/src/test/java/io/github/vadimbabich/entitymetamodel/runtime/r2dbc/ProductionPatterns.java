@@ -14,14 +14,13 @@ import org.springframework.data.relational.core.query.Criteria;
 import org.springframework.data.relational.core.query.CriteriaDefinition;
 
 /**
- * The module's shared test vocabulary — instances, relationships and properties defined once so
- * every suite traverses the same topology — and, over it, the query shapes a production Spring Data
- * R2DBC application builds. Join topology, bind placement and composition order come from real
+ * The module's shared test vocabulary, and over it the query shapes a production Spring Data R2DBC
+ * application builds. Join topology, bind placement and composition order come from real
  * repositories; the tables and columns are this module's own.
  *
- * <p>The shapes live here because the golden suite pins what they render while the invariants suite
- * pins the properties that keep them correct, and a scenario that drifted between the two would let
- * a golden agree with an invariant about the wrong statement.
+ * <p>Shared because the golden suite pins what these shapes render while the invariants suite pins
+ * the properties that keep them correct: a scenario that drifted between the two would let a golden
+ * agree with an invariant about the wrong statement.
  */
 final class ProductionPatterns {
 
@@ -36,8 +35,8 @@ final class ProductionPatterns {
   private ProductionPatterns() {
   }
 
-  // The fixture relationships, named once: two suites traversing "the same" join through private
-  // copies could drift onto different topologies without either noticing.
+  // Named once: two suites traversing "the same" join through private copies could drift onto
+  // different topologies without either noticing.
   static JoinRef<Membership, Account> owningAccount() {
     return JoinRef.of(membershipAccountId(), accountKeyOf(ACCOUNT));
   }
@@ -46,7 +45,7 @@ final class ProductionPatterns {
     return JoinRef.of(membershipSponsorAccountId(), accountKeyOf(ACCOUNT));
   }
 
-  // The reverse direction: one account's memberships, the to-many shape that multiplies rows.
+  // The reverse direction, and the to-many shape that multiplies rows.
   static JoinRef<Account, Membership> memberships() {
     return JoinRef.of(accountKeyOf(ACCOUNT), membershipAccountId());
   }
@@ -61,9 +60,8 @@ final class ProductionPatterns {
 
   /**
    * The dominant shape: a listing scoped to one principal by joining a permission view under an
-   * {@code ON} carrying the principal and an access flag as binds. The mandatory parent is an inner
-   * join and the optional one an outer join; all four instances are projected, because the caller
-   * reads the access flags off the same row.
+   * {@code ON} carrying the principal and an access flag as binds. All four instances are
+   * projected because the caller reads the access flags off the same row.
    */
   static FluentSelect<Membership> scopedListing() {
     return FluentSelect.from(MEMBERSHIP)
@@ -78,9 +76,7 @@ final class ProductionPatterns {
         .on(grantedToPrincipal(GRANT, membershipAccountId().eq(grantKeyOf(GRANT))));
   }
 
-  /**
-   * The same listing as a page: a listing endpoint sorts, then pages.
-   */
+  /** The same listing as a page: a listing endpoint sorts, then pages. */
   static FluentSelect<Membership> pagedScopedListing() {
     return scopedListing()
         .orderBy(ownerEmail().asc())
@@ -90,8 +86,8 @@ final class ProductionPatterns {
 
   /**
    * The licence shape: one permission view joined twice under distinct aliases, the second keyed on
-   * a fallback expression rather than a column. The raw door carries that expression, with the
-   * library writing the aliases.
+   * a fallback expression rather than a column. The raw door carries the expression, the library
+   * writes the aliases.
    */
   static FluentSelect<Membership> doubleGrantSelfJoin() {
     Condition licenceKeyedOnFallback =
@@ -109,9 +105,9 @@ final class ProductionPatterns {
   }
 
   /**
-   * A scoping predicate the caller owns, narrowed by a received filter — the shape behind a search
-   * endpoint. The received half is a disjunction, which is what makes the grouping load-bearing:
-   * ungrouped it would widen the scope instead of narrowing it.
+   * A scoping predicate the caller owns, narrowed by a received filter. The received half is a
+   * disjunction, which is what makes the grouping load-bearing: ungrouped it would widen the scope
+   * instead of narrowing it.
    */
   static FluentSelect<Account> scopeNarrowedBySearch() {
     Condition search = ownerEmail().like("%first%").or(ownerEmail().like("%second%"));
@@ -130,17 +126,55 @@ final class ProductionPatterns {
         .isNotNull();
   }
 
-  /**
-   * That filter, narrowing a scope the caller owns.
-   */
+  /** That filter, narrowing a scope the caller owns. */
   static FluentSelect<Account> scopeNarrowedByReceivedFilter(Condition received) {
     return FluentSelect.from(ACCOUNT)
         .where(ACCOUNT.property("state", AccountState.class).is(AccountState.ACTIVE).and(received));
   }
 
   /**
-   * The unsafe-sort escape. Rarely reached for, which is why it is pinned: an escape with no
-   * recorded rendering is an escape nobody has read.
+   * The README's expanded keyset predicate: the leading key advances, or it ties and the terminal
+   * key breaks the tie. The only form a mixed-direction sort can use.
+   */
+  static <E, L, T> Condition expandedKeysetAfter(
+      PropertyRef<E, L> leadingKey,
+      L leadingCursor,
+      PropertyRef<E, T> terminalKey,
+      T terminalCursor) {
+
+    return leadingKey
+        .gt(leadingCursor)
+        .or(leadingKey.is(leadingCursor).and(terminalKey.gt(terminalCursor)));
+  }
+
+  /**
+   * The README's row-value keyset predicate, for a sort that runs one direction throughout. The
+   * comparison inverts with the sort, so both forms are pinned: reaching for the wrong one is
+   * silent.
+   */
+  static <E, L, T> Condition rowValueKeysetAfter(
+      PropertyRef<E, L> leadingKey,
+      L leadingCursor,
+      PropertyRef<E, T> terminalKey,
+      T terminalCursor) {
+
+    return SqlExpr.raw(
+        "({0}, {1}) > ({2}, {3})", leadingKey, terminalKey, leadingCursor, terminalCursor);
+  }
+
+  static <E, L, T> Condition rowValueKeysetBefore(
+      PropertyRef<E, L> leadingKey,
+      L leadingCursor,
+      PropertyRef<E, T> terminalKey,
+      T terminalCursor) {
+
+    return SqlExpr.raw(
+        "({0}, {1}) < ({2}, {3})", leadingKey, terminalKey, leadingCursor, terminalCursor);
+  }
+
+  /**
+   * The unsafe-sort escape. Pinned because it is rarely reached for: an escape with no recorded
+   * rendering is an escape nobody has read.
    */
   static FluentSelect<Account> listingSortedByAnExpression() {
     return FluentSelect.from(ACCOUNT)
@@ -148,16 +182,19 @@ final class ProductionPatterns {
   }
 
   // The permission join's ON: whatever keys the grant to the row, plus the principal and the access
-  // flag as binds. The key is a column equality ordinarily and an expression in the licence case;
-  // the bind pair is the same either way.
+  // flag as binds. The key is a column equality ordinarily and an expression in the licence case.
   private static Condition grantedToPrincipal(EntityRef<AccessGrant> grant, Condition keyedOn) {
     return keyedOn
         .and(grant.property("principalId", Long.class).is(PRINCIPAL_ID))
         .and(grant.property("hasBrowseAccess", Boolean.class).is(true));
   }
 
-  private static PropertyRef<Membership, Long> membershipAccountId() {
+  static PropertyRef<Membership, Long> membershipAccountId() {
     return MEMBERSHIP.property("accountId", Long.class);
+  }
+
+  static PropertyRef<Membership, Long> membershipId() {
+    return MEMBERSHIP.property("id", Long.class);
   }
 
   private static PropertyRef<Membership, Long> membershipSponsorAccountId() {
