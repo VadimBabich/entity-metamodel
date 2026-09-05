@@ -1,6 +1,6 @@
 # Roadmap
 
-As of 2026-08-31. Updated when direction changes, reviewed at least once per release cycle.
+As of 2026-09-05. Updated when direction changes, reviewed at least once per release cycle.
 
 ## Where the project is
 
@@ -26,9 +26,9 @@ release is freeze and packaging work, not core function:
   a real PostgreSQL in its integration suite.*
 - **BOM** — one aligned version for the whole family. *Built.*
 
-Nothing is on Maven Central yet, deliberately: the first release there will be a version that
-runs end to end — generate a metamodel, build a query, execute it — not a milestone of parts
-nobody can use. The 1.x plugin has been removed. It emitted into Spring's own packages, which is the defect 2.x
+Nothing is on Maven Central yet, deliberately: the first release there will be a version that runs
+end to end — generate a metamodel, build a query, execute it — not a milestone of parts nobody can
+use. The 1.x plugin has been removed. It emitted into Spring's own packages, which is the defect 2.x
 exists to remove; the surviving shape is pinned by a committed corpus of golden files so it cannot
 drift.
 

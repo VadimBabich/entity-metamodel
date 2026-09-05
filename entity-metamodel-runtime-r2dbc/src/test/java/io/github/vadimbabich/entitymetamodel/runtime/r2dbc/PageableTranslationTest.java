@@ -13,7 +13,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import org.springframework.data.r2dbc.dialect.PostgresDialect;
 import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
 /**
@@ -27,7 +26,7 @@ class PageableTranslationTest {
 
   private final R2dbcMappingContext mappingContext = new R2dbcMappingContext();
   private final QueryRenderer renderer =
-      new QueryRenderer(mappingContext, PostgresDialect.INSTANCE);
+      TestRenderers.postgres(mappingContext);
   private final PageableTranslator translator = new PageableTranslator(mappingContext);
 
   private String sqlOf(Pageable pageable) {

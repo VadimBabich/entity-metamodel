@@ -18,7 +18,6 @@ import java.util.Optional;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.r2dbc.dialect.PostgresDialect;
 import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 import org.springframework.data.relational.core.query.Criteria;
 import org.springframework.data.relational.core.query.CriteriaDefinition;
@@ -35,7 +34,7 @@ class CriteriaAdapterTest {
 
   private final R2dbcMappingContext mappingContext = new R2dbcMappingContext();
   private final QueryRenderer renderer =
-      new QueryRenderer(mappingContext, PostgresDialect.INSTANCE);
+      TestRenderers.postgres(mappingContext);
   private final CriteriaAdapter adapter = new CriteriaAdapter(mappingContext);
 
   /**

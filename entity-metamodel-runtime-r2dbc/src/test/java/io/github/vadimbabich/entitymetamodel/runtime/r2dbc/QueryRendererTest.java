@@ -8,10 +8,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.github.vadimbabich.entitymetamodel.runtime.Condition;
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
+import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.BlankSchemaDocument;
+import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.BlankSidedNameDocument;
+import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.DerivedNameDocument;
+import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.DotInNameDocument;
+import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.DottedSchemaDocument;
+import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.SchemaDocument;
+import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.ThreePartNameDocument;
+import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.TrailingDotDocument;
 
 import java.util.List;
+import java.util.Locale;
 
+import org.jspecify.annotations.NullMarked;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
+import org.springframework.data.relational.core.mapping.NamingStrategy;
+import org.springframework.data.relational.core.sql.SqlIdentifier;
 
 /**
  * Rendering is a pure function of the description: no connection, no database, no Spring context.
@@ -22,6 +35,15 @@ import org.junit.jupiter.api.Test;
  * AND-over-OR precedence widen the match silently, so the grouping is pinned by exact SQL.
  */
 class QueryRendererTest {
+
+  private static final String DOTTED_FROM =
+      "FROM \"app_schema\".\"v_document_meta\" \"dottedschemadocument\"";
+  private static final String THREE_PART_FROM =
+      "FROM \"catalog.app_schema.v_document_meta\" \"threepartnamedocument\"";
+  private static final String DOT_IN_NAME_FROM =
+      "FROM \"app_schema\".\"weird.name\" \"dotinnamedocument\"";
+  private static final String BLANK_SCHEMA_FROM =
+      "FROM \"app_schema\".\"v_document_meta\" \"blankschemadocument\"";
 
   private final QueryRenderer renderer = TestRenderers.postgres();
 
@@ -138,6 +160,151 @@ class QueryRendererTest {
   }
 
   @Test
+  void aSchemaQualifiedTableRendersSchemaAndTableAsSeparateIdentifiers() {
+    RenderedStatement statement =
+        renderer.render(FluentSelect.from(EntityRef.of(SchemaDocument.class)));
+
+    assertThat(statement.sql())
+        .contains("FROM \"app_schema\".\"v_document_meta\" \"schemadocument\"");
+  }
+
+  @Test
+  void aDottedTableNameIsSplitIntoSchemaAndTable() {
+    RenderedStatement statement =
+        renderer.render(FluentSelect.from(EntityRef.of(DottedSchemaDocument.class)));
+
+    assertThat(statement.sql())
+        .contains(DOTTED_FROM);
+  }
+
+  @Test
+  void aNameTheSplitCannotGroupIsLeftForTheSubstrateRatherThanGuessedAt() {
+    RenderedStatement threeParts =
+        renderer.render(FluentSelect.from(EntityRef.of(ThreePartNameDocument.class)));
+    RenderedStatement emptySide =
+        renderer.render(FluentSelect.from(EntityRef.of(TrailingDotDocument.class)));
+    RenderedStatement blankSide =
+        renderer.render(FluentSelect.from(EntityRef.of(BlankSidedNameDocument.class)));
+
+    assertThat(threeParts.sql())
+        .contains(THREE_PART_FROM);
+    assertThat(emptySide.sql()).contains("FROM \"trailingdot.\" \"trailingdotdocument\"");
+    assertThat(blankSide.sql()).contains("FROM \"app_schema. \" \"blanksidednamedocument\"");
+  }
+
+  @Test
+  void aNameTheSplitCannotGroupStillOutranksTheStrategyDefaultSchema() {
+    QueryRenderer qualifying = rendererWithDefaultSchema();
+
+    RenderedStatement threeParts =
+        qualifying.render(FluentSelect.from(EntityRef.of(ThreePartNameDocument.class)));
+
+    assertThat(threeParts.sql())
+        .contains(THREE_PART_FROM);
+  }
+
+  @Test
+  void anUnquotedMultiPartNameReachesTheDatabaseAsTheDatabaseSpellsIt() {
+    R2dbcMappingContext unquoting = new R2dbcMappingContext();
+    unquoting.setForceQuote(false);
+
+    QueryRenderer bare = TestRenderers.postgres(unquoting);
+
+    RenderedStatement statement =
+        bare.render(FluentSelect.from(EntityRef.of(ThreePartNameDocument.class)));
+
+    assertThat(statement.sql())
+        .contains("FROM catalog.app_schema.v_document_meta \"threepartnamedocument\"");
+  }
+
+  @Test
+  void anExplicitSchemaLeavesADotInTheTableNameAlone() {
+    RenderedStatement statement =
+        renderer.render(FluentSelect.from(EntityRef.of(DotInNameDocument.class)));
+
+    assertThat(statement.sql())
+        .contains(DOT_IN_NAME_FROM);
+  }
+
+  @Test
+  void splittingADerivedNameKeepsTheContextsQuotingPolicy() {
+    R2dbcMappingContext schemaPrefixing = new R2dbcMappingContext(new SchemaPrefixingNames());
+    schemaPrefixing.setForceQuote(false);
+
+    QueryRenderer bare = TestRenderers.postgres(schemaPrefixing);
+
+    RenderedStatement statement =
+        bare.render(FluentSelect.from(EntityRef.of(DerivedNameDocument.class)));
+
+    assertThat(statement.sql())
+        .contains("FROM app_schema.derivednamedocument \"derivednamedocument\"");
+  }
+
+  @Test
+  void aDefaultSchemaFromTheNamingStrategyQualifiesAnEntityThatDeclaresNone() {
+    QueryRenderer qualifying = rendererWithDefaultSchema();
+
+    RenderedStatement statement = qualifying.render(FluentSelect.from(ACCOUNT));
+
+    assertThat(statement.sql()).contains("FROM \"tenant_a\".\"accounts\" \"account\"");
+  }
+
+  @Test
+  void onlyAnIdentifierCarryingANameOfItsOwnIsSplit() {
+    SqlIdentifier leaf = SqlIdentifier.quoted("app_schema.v_document_meta");
+    SqlIdentifier twoParts =
+        SqlIdentifier.from(SqlIdentifier.quoted("app_schema"), SqlIdentifier.quoted("v_doc"));
+    SqlIdentifier onePartComposite = SqlIdentifier.from(SqlIdentifier.quoted("weird.name"));
+
+    assertThat(TableNameResolver.carriesItsOwnName(leaf)).isTrue();
+    assertThat(TableNameResolver.carriesItsOwnName(twoParts)).isFalse();
+    assertThat(TableNameResolver.carriesItsOwnName(onePartComposite)).isFalse();
+    assertThat(TableNameResolver.carriesItsOwnName(SqlIdentifier.EMPTY)).isFalse();
+  }
+
+  @Test
+  void aDottedNameKeepsItsOwnSchemaRatherThanStackingTheStrategyDefaultOnTop() {
+    QueryRenderer qualifying = rendererWithDefaultSchema();
+
+    RenderedStatement dotted =
+        qualifying.render(FluentSelect.from(EntityRef.of(DottedSchemaDocument.class)));
+    RenderedStatement declared =
+        qualifying.render(FluentSelect.from(EntityRef.of(DotInNameDocument.class)));
+
+    assertThat(dotted.sql())
+        .contains(DOTTED_FROM);
+    assertThat(declared.sql())
+        .contains(DOT_IN_NAME_FROM);
+  }
+
+  @Test
+  void aBlankSchemaAttributeCountsAsAbsentHereBecauseItDoesInTheMappingContext() {
+    RenderedStatement withoutDefault =
+        renderer.render(FluentSelect.from(EntityRef.of(BlankSchemaDocument.class)));
+
+    QueryRenderer qualifying = rendererWithDefaultSchema();
+    RenderedStatement withDefault =
+        qualifying.render(FluentSelect.from(EntityRef.of(BlankSchemaDocument.class)));
+
+    assertThat(withoutDefault.sql())
+        .contains(BLANK_SCHEMA_FROM);
+    assertThat(withDefault.sql())
+        .contains(BLANK_SCHEMA_FROM);
+  }
+
+  @Test
+  void splittingADerivedNameKeepsTheDialectsLetterCaseStandardization() {
+    QueryRenderer standardizing =
+        TestRenderers.postgres(new R2dbcMappingContext(new MixedCaseSchemaPrefixingNames()));
+
+    RenderedStatement statement =
+        standardizing.render(FluentSelect.from(EntityRef.of(DerivedNameDocument.class)));
+
+    assertThat(statement.sql())
+        .contains("FROM \"app_schema\".\"derivednamedocument\" \"derivednamedocument\"");
+  }
+
+  @Test
   void renderingTheSameDescriptionTwiceProducesTheSameStatement() {
     FluentSelect<Account> select =
         FluentSelect.from(ACCOUNT).where(ownerEmail().is("owner@example.com"));
@@ -147,5 +314,36 @@ class QueryRendererTest {
 
     assertThat(first.sql()).isEqualTo(second.sql());
     assertThat(first.values()).isEqualTo(second.values());
+  }
+
+  private static QueryRenderer rendererWithDefaultSchema() {
+    return TestRenderers.postgres(new R2dbcMappingContext(new DefaultSchemaNames()));
+  }
+
+  @NullMarked
+  private static final class SchemaPrefixingNames implements NamingStrategy {
+
+    @Override
+    public String getTableName(Class<?> type) {
+      return "app_schema." + type.getSimpleName().toLowerCase(Locale.ROOT);
+    }
+  }
+
+  @NullMarked
+  private static final class MixedCaseSchemaPrefixingNames implements NamingStrategy {
+
+    @Override
+    public String getTableName(Class<?> type) {
+      return "App_Schema." + type.getSimpleName();
+    }
+  }
+
+  @NullMarked
+  private static final class DefaultSchemaNames implements NamingStrategy {
+
+    @Override
+    public String getSchema() {
+      return "tenant_a";
+    }
   }
 }

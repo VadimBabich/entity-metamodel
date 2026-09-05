@@ -13,6 +13,8 @@ import io.r2dbc.spi.ConnectionFactoryMetadata;
 import org.jspecify.annotations.NullMarked;
 import org.junit.jupiter.api.Test;
 import org.reactivestreams.Publisher;
+import org.springframework.context.support.GenericApplicationContext;
+import org.springframework.data.annotation.Id;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -21,6 +23,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.r2dbc.convert.MappingR2dbcConverter;
 import org.springframework.data.r2dbc.dialect.PostgresDialect;
 import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
+import org.springframework.data.relational.core.mapping.Column;
+import org.springframework.data.relational.core.mapping.Table;
 import org.springframework.r2dbc.core.DatabaseClient;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -37,16 +41,7 @@ class ExecutorAssemblyTest {
 
   private final RefusingConnectionFactory connectionFactory = new RefusingConnectionFactory();
 
-  // Markers supplied rather than resolved: DatabaseClient.create() picks a factory from the
-  // connection factory's driver name, and this one names no driver.
-  private final MetamodelQueryExecutor executor =
-      new MetamodelQueryExecutor(
-          DatabaseClient.builder()
-              .connectionFactory(connectionFactory)
-              .bindMarkers(PostgresDialect.INSTANCE.getBindMarkersFactory())
-              .build(),
-          new QueryRenderer(MAPPING_CONTEXT, PostgresDialect.INSTANCE),
-          new MappingR2dbcConverter(MAPPING_CONTEXT));
+  private final MetamodelQueryExecutor executor = executorFor(MAPPING_CONTEXT, connectionFactory);
 
   @Test
   void buildingATerminalTouchesNoConnection() {
@@ -268,6 +263,110 @@ class ExecutorAssemblyTest {
         .isThrownBy(() -> new MetamodelQueryExecutor(null, null, null));
     assertThatNullPointerException().isThrownBy(() -> executor.count(null));
     assertThatNullPointerException().isThrownBy(() -> executor.exists(null));
+  }
+
+  /**
+   * A page's total must count the relation its content came from. A SpEL name is the only way to
+   * observe that, being the one form re-read on every render.
+   */
+  @Test
+  void aPageRendersItsTotalBeforeItReachesForAConnection() {
+    TenantSchemaHolder tenant = new TenantSchemaHolder();
+    RecordingConnectionFactory connections = new RecordingConnectionFactory(tenant);
+
+    MetamodelQueryExecutor tenantedExecutor =
+        executorFor(contextResolvingAgainst(tenant), connections);
+
+    // Measured rather than assumed: the mapping context evaluates the expression more than once
+    // per render, and that is its business, not this test's.
+    StepVerifier.create(tenantedExecutor.count(FluentSelect.from(EntityRef.of(TenantAccount.class))))
+        .expectError()
+        .verify();
+
+    int oneStatement = connections.schemaReadsWhenAskedForAConnection;
+
+    // Without this the comparison below holds trivially when the expression is never evaluated.
+    assertThat(oneStatement).isPositive();
+
+    StepVerifier.create(
+            tenantedExecutor.page(
+                FluentSelect.from(EntityRef.of(TenantAccount.class)), PageRequest.of(0, 20)))
+        .expectError()
+        .verify();
+
+    int beforeThePageReachedForAConnection =
+        connections.schemaReadsWhenAskedForAConnection - oneStatement;
+
+    assertThat(beforeThePageReachedForAConnection).isEqualTo(2 * oneStatement);
+  }
+
+  // Markers supplied rather than resolved: DatabaseClient.create() picks a factory from the
+  // connection factory's driver name, and these factories name no driver.
+  private static MetamodelQueryExecutor executorFor(
+      R2dbcMappingContext mappingContext, ConnectionFactory connections) {
+
+    return new MetamodelQueryExecutor(
+        DatabaseClient.builder()
+            .connectionFactory(connections)
+            .bindMarkers(PostgresDialect.INSTANCE.getBindMarkersFactory())
+            .build(),
+        TestRenderers.postgres(mappingContext),
+        new MappingR2dbcConverter(mappingContext));
+  }
+
+  private static R2dbcMappingContext contextResolvingAgainst(TenantSchemaHolder tenant) {
+    GenericApplicationContext spring = new GenericApplicationContext();
+    spring.getBeanFactory().registerSingleton("tenantSchemaHolder", tenant);
+    spring.refresh();
+
+    R2dbcMappingContext tenanted = new R2dbcMappingContext();
+    tenanted.setApplicationContext(spring);
+    tenanted.afterPropertiesSet();
+
+    return tenanted;
+  }
+
+  @Table(value = "accounts", schema = "#{@tenantSchemaHolder.schema}")
+  static class TenantAccount {
+
+    @Id
+    @Column("account_id")
+    Long accountId;
+  }
+
+  public static final class TenantSchemaHolder {
+
+    private int schemaReads;
+
+    public String getSchema() {
+      schemaReads++;
+
+      return "tenant_a";
+    }
+  }
+
+  @NullMarked
+  private static final class RecordingConnectionFactory implements ConnectionFactory {
+
+    private final TenantSchemaHolder tenant;
+
+    private int schemaReadsWhenAskedForAConnection;
+
+    private RecordingConnectionFactory(TenantSchemaHolder tenant) {
+      this.tenant = tenant;
+    }
+
+    @Override
+    public Publisher<? extends io.r2dbc.spi.Connection> create() {
+      schemaReadsWhenAskedForAConnection = tenant.schemaReads;
+
+      return Mono.error(new IllegalStateException("No connection in this suite"));
+    }
+
+    @Override
+    public ConnectionFactoryMetadata getMetadata() {
+      return () -> "recording";
+    }
   }
 
   @NullMarked

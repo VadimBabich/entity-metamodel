@@ -32,7 +32,6 @@ class MappingContextResolutionTest {
         .isEqualTo("account_id");
     assertThat(account.property("ownerEmail", String.class).columnName(mappingContext))
         .isEqualTo("owner_email");
-    assertThat(account.tableName(mappingContext)).isEqualTo("accounts");
   }
 
   @Test
