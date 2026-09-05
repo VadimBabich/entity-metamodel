@@ -111,11 +111,16 @@ dotted name whole, so an application writing through a repository and reading th
 reaches two different relations unless the entity states `schema`.
 
 A `@Table` name or schema written as a SpEL expression is evaluated by the substrate on every
-resolution, so it is read when a terminal is called rather than when its publisher is subscribed:
-`all`, `list`, `one`, `first`, `count` and `exists` render while describing the query, and `page`
-defers only because request data needs a failure channel. A publisher described under one tenant and
-subscribed under another therefore queries the first. That timing is unchanged — the table name has
-always resolved there — but the schema attribute now travels the same path.
+resolution, so a terminal reads it when it renders. One rule fixes both when that happens and how a
+failure to resolve arrives, and it is the argument list rather than a list of names: **a terminal
+that takes a `Pageable` defers, and everything else renders at call**. So `page`, `slice` and the
+windowed `all` resolve on subscribe and report a failure as an error signal — request data needs a
+failure channel — while `all`, `list`, `one`, `first`, `count` and `exists` resolve when they are
+called and throw from the call, their mapper forms included, since taking a mapper is not what moves
+a terminal's failures into its publisher. A publisher described under one tenant and subscribed
+under another therefore reads the first tenant's relation through the terminals that render at call,
+and the second's through the three that defer. That split is unchanged — the table name has always
+resolved at render — but the schema attribute now travels the same path.
 
 A page request's sort leads any sort the description already carries, and a sort property the entity
 does not persist arrives as an error signal on the returned publisher rather than as a thrown
@@ -144,6 +149,30 @@ requests issue one statement where they used to issue two. An empty page past th
 counts: coming back empty says the offset overshot, not by how much. An unpaged request over a
 description carrying its own limit or offset still counts, because the rows it left behind are not
 in hand to be counted.
+
+Every row-returning terminal now has a mapper form. `one`, `first` and `list` join `all`, `page` and
+`slice` in taking a `Function<ProjectedRow, R>`, so a row carrying more than one instance reaches
+the single-row terminals without being rebuilt out of `all(...)`: `one` keeps its named
+`IllegalStateException` for an ambiguous match, where the hand-assembled `all(...).singleOrEmpty()`
+substitute reported Reactor's `IndexOutOfBoundsException` and named neither the cause nor the way
+out. Empty, unique and ambiguous results behave exactly as they do for the entity forms. What the
+message carries the type does not: a mapper reading an instance an outer join did not match raises
+`IllegalStateException` too, so catching that type broadly around the mapped `one` turns a mapper
+bug into an empty answer.
+
+`all` also takes a `Pageable`, returning the window as a `Flux` rather than wrapped in a `Page` or a
+`Slice`. It is the streaming terminal for the paged path: the request's sort leads, the window is
+applied, and nothing else is fetched — no count statement and no row probing for a successor, so a
+listing that displays neither pays for neither. Where a total or a successor *is* wanted, `page` and
+`slice` remain the terminals; assembling this shape out of `slice` instead cost a wrapper, an eager
+collect and a probe row the caller never asked for. What the wrapper bought is the other half of the
+trade: `page` and `slice` collect their rows and release the connection, while a stream holds it
+until the subscriber has finished. A downstream that queries from inside the stream therefore needs
+a connection to do it on — outside a transaction that is pool headroom, and inside one there is
+none to be had, since two statements at once on one connection is a protocol error. An unpaged
+request applies the sort alone and leaves whatever window the description carries in place, and a
+request that brings its own window to a description that already bounds itself is refused as a
+collision, exactly as for `page` and `slice`.
 
 A row can also be read back as a projection rather than as a whole entity: `readProjection` takes a
 closed interface whose accessors name the instance's properties, or a DTO, so a listing can carry
