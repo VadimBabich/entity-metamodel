@@ -56,9 +56,7 @@ public final class MetamodelQueryExecutor {
   public <E> Flux<E> all(FluentSelect<E> select) {
     Objects.requireNonNull(select, "select");
 
-    EntityRef<E> selected = select.entity();
-
-    return all(select, row -> row.read(selected));
+    return all(select, entityReader(select));
   }
 
   /** The mapper form, for a row carrying more than one instance. */
@@ -67,6 +65,47 @@ public final class MetamodelQueryExecutor {
     Objects.requireNonNull(mapper, "mapper");
 
     return projectedRows(select).map(mapper);
+  }
+
+  /**
+   * The window a page request describes, as a stream: the request's sort leads any the description
+   * carries, and neither the total {@link #page(FluentSelect, Pageable)} counts nor the probe row
+   * {@link #slice(FluentSelect, Pageable)} fetches is paid for. An unpaged request applies the sort
+   * alone, leaving any window the description carries in place.
+   *
+   * <p>Streaming holds the connection until the subscriber finishes, where a page and a slice
+   * release it once their rows are collected. Querying from inside the stream therefore needs a
+   * second connection, and inside a transaction there is none — two statements at once on one
+   * connection is a protocol error.
+   *
+   * <p>Only a missing argument throws; a sort property the entity does not persist, and a
+   * description that already bounds itself, arrive as error signals.
+   */
+  public <E> Flux<E> all(FluentSelect<E> select, Pageable pageable) {
+    Objects.requireNonNull(select, "select");
+
+    return all(select, pageable, entityReader(select));
+  }
+
+  /**
+   * The mapper form, for a window whose rows carry more than one instance or are read back as
+   * projections. Sort terms resolve against the description's root instance rather than against
+   * what the mapper reads, exactly as they do for a page.
+   */
+  public <R> Flux<R> all(
+      FluentSelect<?> select, Pageable pageable, Function<ProjectedRow, R> mapper) {
+
+    Objects.requireNonNull(select, "select");
+    Objects.requireNonNull(pageable, "pageable");
+    Objects.requireNonNull(mapper, "mapper");
+
+    return Flux.defer(() -> all(pageableTranslator.applyTo(select, pageable), mapper));
+  }
+
+  private static <E> Function<ProjectedRow, E> entityReader(FluentSelect<E> select) {
+    EntityRef<E> selected = select.entity();
+
+    return row -> row.read(selected);
   }
 
   private Flux<ProjectedRow> projectedRows(FluentSelect<?> select) {
@@ -87,9 +126,28 @@ public final class MetamodelQueryExecutor {
   public <E> Mono<E> one(FluentSelect<E> select) {
     Objects.requireNonNull(select, "select");
 
-    // Counted rather than inferred from Reactor's index fault, which would also catch one thrown
-    // while reading a row.
-    return all(select).take(2).collectList().flatMap(MetamodelQueryExecutor::exactlyOne);
+    return exactlyOneOf(all(select));
+  }
+
+  /**
+   * The mapper form, for a row carrying more than one instance. Nothing matching, one match and
+   * several behave as they do for {@link #one(FluentSelect)}.
+   *
+   * <p>The ambiguity refusal and {@link ProjectedRow#read(EntityRef)} on an instance an outer join
+   * did not match both raise {@code IllegalStateException}, so catching that type broadly here
+   * turns a mapper bug into an empty answer.
+   */
+  public <R> Mono<R> one(FluentSelect<?> select, Function<ProjectedRow, R> mapper) {
+    Objects.requireNonNull(select, "select");
+    Objects.requireNonNull(mapper, "mapper");
+
+    return exactlyOneOf(all(select, mapper));
+  }
+
+  // Counted rather than inferred from Reactor's index fault, which would also catch one thrown
+  // while reading a row.
+  private static <R> Mono<R> exactlyOneOf(Flux<R> rows) {
+    return rows.take(2).collectList().flatMap(MetamodelQueryExecutor::exactlyOne);
   }
 
   private static <E> Mono<E> exactlyOne(List<E> rows) {
@@ -114,11 +172,27 @@ public final class MetamodelQueryExecutor {
     return all(select.withAtMostOneRow()).next();
   }
 
+  /** The mapper form, and still only defined if the description sorts. */
+  public <R> Mono<R> first(FluentSelect<?> select, Function<ProjectedRow, R> mapper) {
+    Objects.requireNonNull(select, "select");
+    Objects.requireNonNull(mapper, "mapper");
+
+    return all(select.withAtMostOneRow(), mapper).next();
+  }
+
   /** Bound the description first: this holds the whole result in memory. */
   public <E> Mono<List<E>> list(FluentSelect<E> select) {
     Objects.requireNonNull(select, "select");
 
     return all(select).collectList();
+  }
+
+  /** The mapper form, and it holds the whole result in memory too. */
+  public <R> Mono<List<R>> list(FluentSelect<?> select, Function<ProjectedRow, R> mapper) {
+    Objects.requireNonNull(select, "select");
+    Objects.requireNonNull(mapper, "mapper");
+
+    return all(select, mapper).collectList();
   }
 
   /**
@@ -168,9 +242,7 @@ public final class MetamodelQueryExecutor {
   public <E> Mono<Page<E>> page(FluentSelect<E> select, Pageable pageable) {
     Objects.requireNonNull(select, "select");
 
-    EntityRef<E> selected = select.entity();
-
-    return page(select, pageable, row -> row.read(selected));
+    return page(select, pageable, entityReader(select));
   }
 
   /**
@@ -222,9 +294,7 @@ public final class MetamodelQueryExecutor {
   public <E> Mono<Slice<E>> slice(FluentSelect<E> select, Pageable pageable) {
     Objects.requireNonNull(select, "select");
 
-    EntityRef<E> selected = select.entity();
-
-    return slice(select, pageable, row -> row.read(selected));
+    return slice(select, pageable, entityReader(select));
   }
 
   /**

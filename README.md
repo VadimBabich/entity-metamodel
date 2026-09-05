@@ -46,29 +46,31 @@ This participates in compilation instead:
   `NamingStrategy` stay the single source of truth for generation, rendering and row reading alike.
 - **Ordinary code.** Generated files are plain `.java` on your compile path. Ctrl-click reaches the
   declaration, find-usages works, the debugger steps through them.
-- **Deterministic.** Regenerating over unchanged sources is byte-identical — no dates, no
-  environment-dependent content — and the output is pinned by a committed corpus of expected files,
-  so it cannot drift without a visible diff.
+- **Deterministic.** Regenerating over unchanged sources is byte-identical, and the output is pinned
+  by a committed corpus of expected files, so it cannot drift without a visible diff.
 
 ## Five minutes
 
-Two ordinary Spring Data entities, with nothing added for the tool's benefit:
+An ordinary Spring Data entity. This one is from the committed corpus, so what follows is exactly
+what the processor emits for it:
 
 ```java
 @Table("accounts")
 public class Account {
-  @Id @Column("account_id") Long id;
-  @Column("owner_email") String ownerEmail;
-}
 
-@Table("memberships")
-public class Membership {
-  @Id @Column("membership_id") Long id;
-  @Column("account_id") Long accountId;
+  @Id @Column("account_id") Long id;
+
+  @Column("owner_email") String ownerEmail;
+
+  String nickname;
+
+  @Transient @Column("draft_note") String draftNote;
+
+  @Column("source_url_path") String sourceURLPath;
 }
 ```
 
-Compile, and a metamodel appears beside each one:
+Compile, and a metamodel appears beside it:
 
 ```java
 @Generated("io.github.vadimbabich.entitymetamodel")
@@ -76,12 +78,17 @@ public final class Account__ {
   public static final EntityRef<Account> ENTITY = EntityRef.of(Account.class);
 
   public static final PropertyRef<Account, Long> ID = ENTITY.property("id", Long.class);
+  public static final PropertyRef<Account, String> NICKNAME = ENTITY.property("nickname", String.class);
   public static final PropertyRef<Account, String> OWNER_EMAIL = ENTITY.property("ownerEmail", String.class);
+  public static final PropertyRef<Account, String> SOURCE_URL_PATH = ENTITY.property("sourceURLPath", String.class);
 }
 ```
 
-Now the query. `JoinRef.of` compiles only because both sides are `Long`, and `is("…")` only because
-`OWNER_EMAIL` is a `String` property:
+`nickname` is there without a `@Column`, because the annotation renames a property rather than
+deciding membership. `draftNote` is not, because `@Transient` wins over it. Members come out ordered
+by name, so the file never depends on the compiler that produced it.
+
+Now the query, joining `Membership` to the account that owns it:
 
 ```java
 JoinRef<Membership, Account> owner = JoinRef.of(Membership__.ACCOUNT_ID, Account__.ID);
@@ -95,9 +102,10 @@ Flux<Membership> rows = executor.all(byOwner);
 Mono<Page<Membership>> page = executor.page(byOwner, PageRequest.of(0, 20));
 ```
 
-`byOwner` is an immutable value that performs no I/O — describing it touches no database, and the
-same description serves both the page and its count. Rename `ownerEmail` and this file stops
-compiling.
+`JoinRef.of` compiles only because both sides are `Long`, and `is("…")` only because `OWNER_EMAIL`
+is a `String` property. `byOwner` is an immutable value that performs no I/O — describing it touches
+no database, and the same description serves both the page and its count. Rename `ownerEmail` and
+this file stops compiling.
 
 The executor is the one thing you wire yourself. The library registers no component and holds no
 static state, so it never guesses which client, context or dialect you meant:
@@ -136,14 +144,12 @@ other when reading it back, so two contexts produce rows nothing claims.
 
 **Generation** — `entity-metamodel-processor`, a JSR-269 processor with no third-party dependency:
 
-- `@Table` classes and records, following Spring's persistent-property rules: `@Column` renames but
-  does not decide membership, `@Transient` wins. `-Aentitymetamodel.requireColumnAnnotation` opts
-  into the stricter rule.
+- `@Table` classes and records, following Spring's persistent-property rules.
+  `-Aentitymetamodel.requireColumnAnnotation` opts into the stricter rule.
 - Inherited members flattened into the concrete entity and re-anchored there; nested `@Table` types
   mirrored as nested metamodels.
 - Exact declared types — generics, arrays, bounded wildcards — carried into the ref type arguments.
-- Members ordered by name, so output does not depend on the compiler. Held byte-for-byte against the
-  committed corpus on JDK 17, 21 and 25.
+- Output held byte-for-byte against the committed corpus on JDK 17, 21 and 25.
 - Registered *isolating*: editing one entity regenerates one metamodel. Measured end to end on
   Gradle 9.4.1, including a rename of a private field on a mapped supertype.
 
@@ -155,26 +161,27 @@ other when reading it back, so two contexts produce rows nothing claims.
 - Typed filters — equality, ranges, `IN`, `LIKE`, null tests, column-to-column comparison,
   negation — composed with `and`/`or` and parenthesised by construction, so an `OR` cannot widen a
   match by re-associating.
-- `distinct()`, for the row multiplication a to-many join causes. The total and the paging probe
-  keep their meaning rather than being approximated.
-- `page`, `slice`, `list`, `one`, `first`, `count` and `exists`, all returning cold publishers.
-- Count elision: a page counts only where the rows in hand cannot imply the total. `slice` never
-  counts at all — it fetches one row past the page and reports a successor from whether that row
-  arrived, which is what an infinite-scrolling listing actually needs.
+- Terminals `all`, `page`, `slice`, `list`, `one`, `first`, `count` and `exists`, every one of them
+  a cold publisher. Every row-returning terminal takes a mapper, and `all` also takes a `Pageable`
+  to stream one window as a `Flux`.
+- Count elision: a page counts only where the rows in hand cannot imply the total, and `slice` never
+  counts at all — it fetches one row past the page and reports a successor from whether it arrived.
+- `distinct()`, for the row multiplication a to-many join causes. The total and the paging probe keep
+  their meaning rather than being approximated.
 - `Pageable` translation, including a sort property that arrives as text from a web request.
 - A `Criteria` your application already builds, accepted unchanged through `CriteriaAdapter` with
-  nested groups and SQL precedence intact — so adopting this is not a rewrite of your filter code.
-  An integration test holds its rows equal to Spring's own template across a matrix of filters.
-- Schema-qualified tables: an entity that declares a schema resolves against it rather than against
-  whatever `search_path` offers, round-tripped against a real non-default schema.
+  nested groups and SQL precedence intact, so adopting this is not a rewrite of your filter code. An
+  integration test holds its rows equal to Spring's own template across a matrix of filters.
+- Schema-qualified tables, round-tripped against a real non-default schema.
 - Projections: `readProjection` takes a closed interface or a DTO, so a listing can carry two
-  columns of a joined table. `page`, `slice` and `all` all take a mapper, so a projected listing
-  needs no hand-assembly.
+  columns of a joined table without hydrating it.
 - A raw-SQL door for what the vocabulary cannot say, where `{0}` names either a bind value or a
   property whose column the library writes. Numbered rather than `?`, so a fragment can still use
   PostgreSQL's jsonb `?`, `?|` and `?&` operators.
 
-[`CHANGELOG.md`](CHANGELOG.md) carries the same list in detail, with the reasoning behind each rule.
+[`CHANGELOG.md`](CHANGELOG.md) carries the same list in detail, with the reasoning behind each rule,
+and [`docs/query-recipes.md`](docs/query-recipes.md) has the answers given in place of a feature —
+keyset pagination among them.
 
 ## What it deliberately doesn't do
 
@@ -190,28 +197,23 @@ other when reading it back, so two contexts produce rows nothing claims.
   compiler does not present types carrying a stereotype composed over it, though such a type *is*
   recognised once another entity refers to it.
 - **Only part of Spring's read machinery applies,** because rows are materialised from their own
-  columns rather than through an entity template. Property-level reading converters work everywhere.
-  An entity-level `Converter<RowDocument, T>` applies to a whole-entity read but not to a
-  projection, and projecting such an entity is refused rather than quietly bypassing it — a
-  deliberate difference from Spring's template, where the same projection succeeds and hands back
-  the unconverted value. An entity-level `Converter<Row, T>` and `AfterConvertCallback` never fire
-  at all. Post-read logic belongs in the mapper the executor takes.
+  columns rather than through an entity template. Property-level reading converters work everywhere;
+  an entity-level `Converter<RowDocument, T>` applies to a whole-entity read but not to a
+  projection, and an entity-level `Converter<Row, T>` and `AfterConvertCallback` never fire at all.
+  Post-read logic belongs in the mapper the executor takes.
 - **Projections are checked one way only.** An interface projection is checked against the entity
   and an open `@Value` one is refused; a DTO is bound by Spring itself and passed through unchecked,
   so a stale field there reads null.
-- **Schema resolution has sharp edges.** A schema reaches the SQL from the `@Table` attribute or a
-  `NamingStrategy` default, so an entity declaring none can still render qualified and a
-  `search_path`-routed deployment finds those queries pinned. That default is resolved once per
-  entity and cached, so it cannot route per tenant — a schema that must vary belongs on `@Table` as
-  SpEL. A dotted `@Table("a.b")` reads as schema `a`, table `b`, which silently targets the wrong
-  relation if a schema `a` holds a table `b`; `@Table(value = "a.b", schema = "…")` turns that off,
-  at the price of a schema fixed in source. The split is this library's read path only, so an
-  application that also writes through a repository should state `schema`. CHANGELOG has the full
-  rule set.
-- **A name that varies is read when you call the terminal, not when something subscribes.** A SpEL
-  `@Table` value or schema resolves while the publisher is described, so one built under a tenant
-  and subscribed under another queries the first, and a failure to resolve throws from every
-  terminal except `page` and `slice`. Resolving costs two evaluations, and `page` pays twice over.
+- **Schema resolution has sharp edges.** A `NamingStrategy` default is resolved once per entity and
+  cached, so it cannot route per tenant — a schema that must vary belongs on `@Table` as SpEL. A
+  dotted `@Table("a.b")` reads as schema `a`, table `b`, which silently targets the wrong relation
+  if a schema `a` holds a table `b`; `@Table(value = "a.b", schema = "…")` turns that off. The split
+  is this library's read path only. CHANGELOG has the full rule set.
+- **When a name that varies is read follows the argument list.** A terminal taking a `Pageable`
+  defers, so `page`, `slice` and the windowed `all` resolve a SpEL `@Table` name on subscribe and
+  report a failure to resolve on the publisher; every other terminal resolves when you call it and
+  throws from the call. A publisher described under one tenant and subscribed under another
+  therefore reads different relations through the two groups.
 - **One dialect is exercised end to end.** Rendering goes through Spring's own dialect machinery,
   but only PostgreSQL is tested.
 - **Across a module boundary, Gradle will not regenerate.** Editing a mapped supertype in another
@@ -234,100 +236,11 @@ Every option here solves a real problem. The question is whose, and what it coup
 | Full SQL: aggregates, unions, windows, DML | — | no | yes | **yes** | no — deliberate |
 
 Two differences do most of the work. QueryDSL's SQL module executes over JDBC, so a reactive
-codebase gets no first-party executor; upstream has also been quiet since 5.1.0 in January 2024,
-with maintenance continuing in a community fork. jOOQ is the strongest alternative and is
-schema-first: its metamodel comes from the database, so alongside Spring Data your column names,
-converters and entity mapping live in two systems that nothing keeps consistent. If your queries
-need aggregation, set operations or window functions as a matter of course, jOOQ is the right tool —
-and the two coexist without conflict, precisely because this one stops where full SQL begins.
-
-## Query recipes
-
-The answers this library gives in place of a feature. The SQL each one renders is pinned by
-`DocumentedRecipeRenderingTest`, `PageableTranslationTest` and `SortAndPaginationRenderingTest`, and
-the keyset traversals are walked against PostgreSQL in the integration suite, so a published recipe
-cannot quietly stop working.
-
-**Is there another page, without counting.** Where you are fetching the page anyway, `slice` is the
-answer — it asks for one row beyond the page and issues no count statement at all:
-
-```java
-Mono<Slice<Membership>> slice = executor.slice(byOwner, PageRequest.of(0, 20));
-```
-
-Where you are *not* fetching the page — a "load more" control that only needs enabling — the probe
-is cheaper still, because the description's own offset is honoured. The offset is the end of the
-page you are showing, so for the first page of twenty it is twenty:
-
-```java
-Mono<Boolean> more = executor.exists(byOwner.offset(20));
-```
-
-**Keyset (cursor) pagination.** There is no keyset terminal, and both predicate forms are
-expressible today with no library change. The metamodel supplies the qualified column names either
-way, so neither spells out a table alias and neither carries an injection exposure.
-
-Prefer the row-value form wherever the sort runs one direction throughout — it is the only one of
-the two that PostgreSQL turns into an index seek. **The comparison inverts with the sort:** `>`
-walks an all-ascending sort, `<` an all-descending one.
-
-```java
-// ORDER BY owner_email ASC, account_id ASC
-Condition after =
-    SqlExpr.raw("({0}, {1}) > ({2}, {3})", Account__.OWNER_EMAIL, Account__.ID,
-        cursorEmail, cursorId);
-
-// ORDER BY owner_email DESC, account_id DESC — the feed case
-Condition after =
-    SqlExpr.raw("({0}, {1}) < ({2}, {3})", Account__.OWNER_EMAIL, Account__.ID,
-        cursorEmail, cursorId);
-```
-
-Getting that operator wrong is silent: the SQL is valid, the plan still seeks, and the traversal
-re-serves the leading page for ever.
-
-The expanded form is the fallback for a mixed-direction sort, which the row-value form cannot
-express. It is correct and portable, and it is **not** free:
-
-```java
-Condition after = Account__.OWNER_EMAIL.gt(cursorEmail)
-    .or(Account__.OWNER_EMAIL.is(cursorEmail).and(Account__.ID.gt(cursorId)));
-```
-
-Both parenthesise correctly with a filter of your own on either side, and both traverse correctly —
-an integration test walks a tied leading key with each.
-
-One `EXPLAIN (ANALYZE, BUFFERS)` per form, on synthetic data you can rebuild: PostgreSQL 16, 200,000
-rows, ten rows per distinct leading key so that key is non-unique, a composite index on the two key
-columns, `ANALYZE`, page size 20, cursor at the 90th percentile **of the index order**.
-
-| | row-value | expanded |
-|---|---|---|
-| how the planner uses the predicate | `Index Cond` — seeks to the cursor | `Filter` — scans from the start and discards |
-| rows discarded to fill one page | 0 | 180,001 |
-| buffers | 5 | 6,190 |
-| execution | 0.05 ms | 14.47 ms |
-
-The gap grows with depth — a sweep over the same data timed the expanded form at 1.9 / 9.3 / 16.1 ms
-at the 10th, 50th and 90th percentile, while the row-value form stayed flat at ~0.03 ms. **The
-expanded form uses the index for ordering only, so it reproduces the deep-page degradation keyset
-pagination exists to remove.** The timings are point-in-time and the build does not re-check them;
-the plan shapes are the durable part. If your sort is mixed-direction and your pages go deep,
-reversing the whole sort to make it uniform is usually the better trade.
-
-What the library cannot check here, and you must:
-
-- **The sort has to end in a unique key** — the entity's `@Id` is the usual one. Without it the
-  traversal skips or repeats rows, and no error says so.
-- **Every sort property must be projected**, and the key values must match the sort in arity, order
-  and type.
-- **No null sort keys.** Both forms evaluate to NULL where a key is NULL, so those rows drop out of
-  the traversal silently.
-- **The row-value form needs one direction throughout, and its operator has to match that
-  direction.** A mixed-direction sort such as `createdAt DESC, id ASC` is what neither operator can
-  express, so that one needs the expanded form — at the cost measured above.
-- **Not over a to-many join,** where one root id no longer identifies one row. Add `distinct()` and
-  the joined instance's id to the key, or key on a description that does not join.
+codebase gets no first-party executor. jOOQ is the strongest alternative and is schema-first: its
+metamodel comes from the database, so alongside Spring Data your column names, converters and entity
+mapping live in two systems that nothing keeps consistent. If your queries need aggregation, set
+operations or window functions as a matter of course, jOOQ is the right tool — and the two coexist
+without conflict, precisely because this one stops where full SQL begins.
 
 ## Requirements and installation
 
@@ -437,6 +350,8 @@ the point of the reboot.
 
 - [`CHANGELOG.md`](CHANGELOG.md) — what exists, in detail. The record the rest condenses from.
 - [`ROADMAP.md`](ROADMAP.md) — where it is going, and what gates the order.
+- [`docs/query-recipes.md`](docs/query-recipes.md) — keyset pagination and the other answers given
+  in place of a feature, with the SQL each one renders.
 - [`docs/reactive-code-style.md`](docs/reactive-code-style.md) — the reactive rules; contractual for
   anything touching the runtime.
 - [`docs/runbooks/golden-corpus-update.md`](docs/runbooks/golden-corpus-update.md) — how generated

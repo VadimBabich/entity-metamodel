@@ -419,6 +419,83 @@ class MetamodelQueryExecutorIT {
         .verifyComplete();
   }
 
+  private record MembershipWithOwner(Membership membership, Account owner) {
+  }
+
+  private FluentSelect<Membership> membershipsWithOwner() {
+    return FluentSelect.from(MEMBERSHIP).join(owningAccount()).alsoSelect(ACCOUNT);
+  }
+
+  private MembershipWithOwner withOwner(ProjectedRow row) {
+    return new MembershipWithOwner(row.read(MEMBERSHIP), row.read(ACCOUNT));
+  }
+
+  @Test
+  void aMappedOneReadsTheSingleMatchingRowIntoWhateverTheMapperMakesOfIt() {
+    StepVerifier.create(
+            executor.one(
+                membershipsWithOwner().where(membershipId().is(12L)),
+                this::withOwner))
+        .assertNext(
+            ownedMembership -> {
+              assertThat(ownedMembership.membership().id).isEqualTo(12L);
+              assertThat(ownedMembership.owner().ownerEmail).isEqualTo("second@example.com");
+            })
+        .verifyComplete();
+  }
+
+  @Test
+  void aMappedOneRefusesToChooseBetweenSeveralMatchesInsteadOfFaultingOnAnIndex() {
+    StepVerifier.create(
+            executor.one(
+                membershipsWithOwner().where(ownerEmail().is("first@example.com")),
+                this::withOwner))
+        .expectErrorSatisfies(
+            tooMany ->
+                assertThat(tooMany)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("more than one row")
+                    .hasMessageContaining("first("))
+        .verify();
+  }
+
+  @Test
+  void aMappedOneIsAnEmptyPublisherWhenNothingMatches() {
+    StepVerifier.create(
+            executor.one(
+                membershipsWithOwner().where(membershipId().is(99L)),
+                this::withOwner))
+        .verifyComplete();
+  }
+
+  @Test
+  void aMappedFirstTakesTheLeadingRowOfTheSortItWasGiven() {
+    StepVerifier.create(
+            executor.first(
+                membershipsWithOwner().orderBy(membershipId().asc()),
+                this::withOwner))
+        .assertNext(
+            ownedMembership -> {
+              assertThat(ownedMembership.membership().id).isEqualTo(10L);
+              assertThat(ownedMembership.owner().ownerEmail).isEqualTo("first@example.com");
+            })
+        .verifyComplete();
+  }
+
+  @Test
+  void aMappedListCollectsEveryMappedRowIntoOneValue() {
+    StepVerifier.create(
+            executor.list(
+                membershipsWithOwner().orderBy(membershipId().asc()),
+                this::withOwner))
+        .assertNext(
+            ownedMemberships ->
+                assertThat(ownedMemberships)
+                    .extracting(row -> row.membership().id)
+                    .containsExactly(10L, 11L, 12L))
+        .verifyComplete();
+  }
+
   @Test
   void anEmptyResultIsAnEmptyPublisherRatherThanAnError() {
     StepVerifier.create(
@@ -730,6 +807,61 @@ class MetamodelQueryExecutorIT {
               assertThat(slice.hasNext()).isTrue();
             })
         .verifyComplete();
+  }
+
+  @Test
+  void aWindowedAllStreamsExactlyTheRequestedWindowWithoutCountingOrProbing() {
+    statements.mark();
+
+    StepVerifier.create(
+            recordingExecutor.all(FluentSelect.from(ACCOUNT), PageRequest.of(0, 2, Sort.by("id"))))
+        .assertNext(account -> assertThat(account.id).isEqualTo(1L))
+        .assertNext(account -> assertThat(account.id).isEqualTo(2L))
+        .verifyComplete();
+
+    assertOneStatementAndNoCount();
+  }
+
+  @Test
+  void aWindowedAllPastTheFirstPageStreamsTheRowsThatFollowIt() {
+    statements.mark();
+
+    StepVerifier.create(
+            recordingExecutor.all(FluentSelect.from(ACCOUNT), PageRequest.of(1, 2, Sort.by("id"))))
+        .assertNext(account -> assertThat(account.id).isEqualTo(3L))
+        .verifyComplete();
+
+    assertOneStatementAndNoCount();
+  }
+
+  @Test
+  void aMappedWindowedAllStreamsTheWindowThroughItsMapper() {
+    StepVerifier.create(
+            executor.all(
+                membershipsWithOwner().orderBy(membershipId().asc()),
+                PageRequest.of(1, 1),
+                this::withOwner))
+        .assertNext(
+            ownedMembership -> {
+              assertThat(ownedMembership.membership().id).isEqualTo(11L);
+              assertThat(ownedMembership.owner().ownerEmail).isEqualTo("first@example.com");
+            })
+        .verifyComplete();
+  }
+
+  @Test
+  void anUnpagedWindowedAllStreamsEveryRowInTheRequestedOrder() {
+    statements.mark();
+
+    StepVerifier.create(
+            recordingExecutor.all(FluentSelect.from(ACCOUNT), Pageable.unpaged(Sort.by("id"))))
+        .assertNext(account -> assertThat(account.id).isEqualTo(1L))
+        .assertNext(account -> assertThat(account.id).isEqualTo(2L))
+        .assertNext(account -> assertThat(account.id).isEqualTo(3L))
+        .verifyComplete();
+
+    assertOneStatementAndNoCount();
+    assertThat(statements.sinceMark()).noneMatch(sql -> sql.contains("LIMIT"));
   }
 
   @Test
@@ -1501,6 +1633,53 @@ class MetamodelQueryExecutorIT {
             executor.slice(FluentSelect.from(GHOST), PageRequest.of(0, 2), row -> row.read(GHOST)))
         .expectError()
         .verify();
+  }
+
+  @Test
+  void cancellingAWindowedAllBeforeItsRowsArriveTerminatesWithoutCompleting() {
+    StepVerifier.create(executor.all(FluentSelect.from(ACCOUNT), PageRequest.of(0, 2)))
+        .thenCancel()
+        .verify();
+    StepVerifier.create(
+            executor.all(
+                FluentSelect.from(ACCOUNT), PageRequest.of(0, 2), row -> row.read(ACCOUNT).id))
+        .thenCancel()
+        .verify();
+  }
+
+  @Test
+  void aWindowedAllOverAStatementTheDatabaseRejectsArrivesAsAnErrorSignal() {
+    StepVerifier.create(executor.all(FluentSelect.from(GHOST), PageRequest.of(0, 2)))
+        .expectError()
+        .verify();
+    StepVerifier.create(
+            executor.all(FluentSelect.from(GHOST), PageRequest.of(0, 2), row -> row.read(GHOST)))
+        .expectError()
+        .verify();
+  }
+
+  @Test
+  void cancellingAMappedRowTerminalBeforeItsAnswerArrivesTerminatesWithoutCompleting() {
+    Function<ProjectedRow, Long> membershipKey = row -> row.read(MEMBERSHIP).id;
+
+    StepVerifier.create(executor.one(FluentSelect.from(MEMBERSHIP), membershipKey))
+        .thenCancel()
+        .verify();
+    StepVerifier.create(executor.first(FluentSelect.from(MEMBERSHIP), membershipKey))
+        .thenCancel()
+        .verify();
+    StepVerifier.create(executor.list(FluentSelect.from(MEMBERSHIP), membershipKey))
+        .thenCancel()
+        .verify();
+  }
+
+  @Test
+  void aMappedRowTerminalOverAStatementTheDatabaseRejectsArrivesAsAnErrorSignal() {
+    Function<ProjectedRow, Ghost> ghost = row -> row.read(GHOST);
+
+    StepVerifier.create(executor.one(FluentSelect.from(GHOST), ghost)).expectError().verify();
+    StepVerifier.create(executor.first(FluentSelect.from(GHOST), ghost)).expectError().verify();
+    StepVerifier.create(executor.list(FluentSelect.from(GHOST), ghost)).expectError().verify();
   }
 
   // The negative assertion is the whole value: one statement and no count is what an elided count
