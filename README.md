@@ -128,6 +128,42 @@ MetamodelQueryExecutor metamodelQueryExecutor(
 Renderer and converter must share one mapping context: one names a column when projecting it and the
 other when reading it back, so two contexts produce rows nothing claims.
 
+### Keeping your repositories
+
+The executor is an ordinary bean, so it goes wherever your code already goes — including a Spring
+Data repository. Put it in the custom fragment and the rest of the interface is untouched: derived
+methods and `@Query` methods are a different mechanism and keep working.
+
+```java
+public interface MembershipRepository
+    extends ReactiveCrudRepository<Membership, Long>, MembershipQueries { }
+
+interface MembershipQueries {
+  Flux<Membership> findByOwnerEmail(String email, Pageable pageable);
+}
+
+class MembershipQueriesImpl implements MembershipQueries {
+
+  private final MetamodelQueryExecutor executor;
+
+  MembershipQueriesImpl(MetamodelQueryExecutor executor) {
+    this.executor = executor;
+  }
+
+  @Override
+  public Flux<Membership> findByOwnerEmail(String email, Pageable pageable) {
+    FluentSelect<Membership> scoped = FluentSelect.from(Membership__.ENTITY)
+        .join(JoinRef.of(Membership__.ACCOUNT_ID, Account__.ID))
+        .where(Account__.OWNER_EMAIL.is(email));
+
+    return executor.all(scoped, pageable);
+  }
+}
+```
+
+`ownerEmail` belongs to the joined table, so no derived method can express this one — which is what
+the fragment is for. `save` and `deleteById` still go through Spring's own machinery.
+
 ## Core ideas
 
 - **Compile-time, because the input is compilation.** Annotated Java in the same module is exactly
