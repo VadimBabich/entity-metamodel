@@ -165,6 +165,8 @@ other when reading it back, so two contexts produce rows nothing claims.
 - A `Criteria` your application already builds, accepted unchanged through `CriteriaAdapter` with
   nested groups and SQL precedence intact — so adopting this is not a rewrite of your filter code.
   An integration test holds its rows equal to Spring's own template across a matrix of filters.
+- Schema-qualified tables: an entity that declares a schema resolves against it rather than against
+  whatever `search_path` offers, round-tripped against a real non-default schema.
 - Projections: `readProjection` takes a closed interface or a DTO, so a listing can carry two
   columns of a joined table. `page`, `slice` and `all` all take a mapper, so a projected listing
   needs no hand-assembly.
@@ -197,6 +199,19 @@ other when reading it back, so two contexts produce rows nothing claims.
 - **Projections are checked one way only.** An interface projection is checked against the entity
   and an open `@Value` one is refused; a DTO is bound by Spring itself and passed through unchecked,
   so a stale field there reads null.
+- **Schema resolution has sharp edges.** A schema reaches the SQL from the `@Table` attribute or a
+  `NamingStrategy` default, so an entity declaring none can still render qualified and a
+  `search_path`-routed deployment finds those queries pinned. That default is resolved once per
+  entity and cached, so it cannot route per tenant — a schema that must vary belongs on `@Table` as
+  SpEL. A dotted `@Table("a.b")` reads as schema `a`, table `b`, which silently targets the wrong
+  relation if a schema `a` holds a table `b`; `@Table(value = "a.b", schema = "…")` turns that off,
+  at the price of a schema fixed in source. The split is this library's read path only, so an
+  application that also writes through a repository should state `schema`. CHANGELOG has the full
+  rule set.
+- **A name that varies is read when you call the terminal, not when something subscribes.** A SpEL
+  `@Table` value or schema resolves while the publisher is described, so one built under a tenant
+  and subscribed under another queries the first, and a failure to resolve throws from every
+  terminal except `page` and `slice`. Resolving costs two evaluations, and `page` pays twice over.
 - **One dialect is exercised end to end.** Rendering goes through Spring's own dialect machinery,
   but only PostgreSQL is tested.
 - **Across a module boundary, Gradle will not regenerate.** Editing a mapped supertype in another

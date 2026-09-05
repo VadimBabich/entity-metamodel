@@ -10,7 +10,6 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.data.r2dbc.dialect.PostgresDialect;
 import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 
 /**
@@ -29,7 +28,7 @@ class ProductionPatternGoldenSqlTest {
 
   private final R2dbcMappingContext mappingContext = new R2dbcMappingContext();
   private final QueryRenderer renderer =
-      new QueryRenderer(mappingContext, PostgresDialect.INSTANCE);
+      TestRenderers.postgres(mappingContext);
 
   @Test
   void aListingScopedToOnePrincipalRendersAsRecorded() {

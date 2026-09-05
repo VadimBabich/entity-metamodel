@@ -14,6 +14,10 @@ final class TestRenderers {
   }
 
   static QueryRenderer postgres() {
-    return new QueryRenderer(new R2dbcMappingContext(), PostgresDialect.INSTANCE);
+    return postgres(new R2dbcMappingContext());
+  }
+
+  static QueryRenderer postgres(R2dbcMappingContext mappingContext) {
+    return new QueryRenderer(mappingContext, PostgresDialect.INSTANCE);
   }
 }

@@ -22,14 +22,17 @@ import io.github.vadimbabich.entitymetamodel.runtime.Condition;
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import io.github.vadimbabich.entitymetamodel.runtime.ExpressionSort;
 import io.github.vadimbabich.entitymetamodel.runtime.JoinRef;
+import io.github.vadimbabich.entitymetamodel.runtime.PropertyRef;
 import io.github.vadimbabich.entitymetamodel.runtime.SqlExpr;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.AccountState;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.DocumentRecord;
+import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.DottedSchemaDocument;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Ghost;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Membership;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.NotificationPreferenceSnapshot;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Order;
+import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.SchemaDocument;
 import io.r2dbc.proxy.ProxyConnectionFactory;
 import io.r2dbc.proxy.core.QueryExecutionInfo;
 import io.r2dbc.proxy.core.QueryInfo;
@@ -40,6 +43,7 @@ import io.r2dbc.spi.ConnectionFactoryOptions;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -53,7 +57,6 @@ import org.springframework.data.domain.Slice;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.r2dbc.convert.MappingR2dbcConverter;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
-import org.springframework.data.r2dbc.dialect.PostgresDialect;
 import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
 import org.springframework.data.relational.core.query.Criteria;
 import org.springframework.data.relational.core.query.CriteriaDefinition;
@@ -108,7 +111,7 @@ class MetamodelQueryExecutorIT {
     R2dbcMappingContext mappingContext = new R2dbcMappingContext();
     criteriaAdapter = new CriteriaAdapter(mappingContext);
 
-    QueryRenderer renderer = new QueryRenderer(mappingContext, PostgresDialect.INSTANCE);
+    QueryRenderer renderer = TestRenderers.postgres(mappingContext);
     MappingR2dbcConverter converter = new MappingR2dbcConverter(mappingContext);
 
     executor = new MetamodelQueryExecutor(databaseClient, renderer, converter);
@@ -153,6 +156,14 @@ class MetamodelQueryExecutorIT {
     // fixture name happens to avoid.
     execute("create table orders (id bigint primary key, \"placedBy\" varchar(255))");
     execute("insert into orders values (1, 'someone')");
+
+    // A table in a non-default schema, which no other fixture has.
+    execute("create schema app_schema");
+    execute(
+        "create table app_schema.v_document_meta (dm_doc_id bigint primary key,"
+            + " dm_name varchar(255))");
+    execute("insert into app_schema.v_document_meta values (1, 'first')");
+    execute("insert into app_schema.v_document_meta values (2, 'second')");
   }
 
   @AfterAll
@@ -192,6 +203,67 @@ class MetamodelQueryExecutorIT {
     StepVerifier.create(executor.count(FluentSelect.from(ACCOUNT)))
         .expectNext(3L)
         .verifyComplete();
+  }
+
+  @Test
+  void aSchemaQualifiedEntityResolvesAgainstItsNonDefaultSchema() {
+    assertReachesTheDocumentRelation(
+        EntityRef.of(SchemaDocument.class), document -> document.name);
+  }
+
+  // Shared so the two spellings are held to the same rows and the same total, rather than drifting
+  // into asserting different things about the relation they are supposed to agree on.
+  private <T> void assertReachesTheDocumentRelation(
+      EntityRef<T> documents, Function<T, String> name) {
+
+    FluentSelect<T> byId =
+        FluentSelect.from(documents).orderBy(documents.property("id", Long.class).asc());
+
+    StepVerifier.create(executor.all(byId).map(name))
+        .expectNext("first", "second")
+        .verifyComplete();
+
+    StepVerifier.create(executor.count(FluentSelect.from(documents)))
+        .expectNext(2L)
+        .verifyComplete();
+  }
+
+  /**
+   * page renders two statements from two passes, so a qualified table has two chances to come out
+   * differently; joined too, since alias handling is where a two-part name would most likely bite.
+   */
+  @Test
+  void aSchemaQualifiedEntityPagesAndJoinsAgainstItsOwnSchema() {
+    EntityRef<SchemaDocument> documents = EntityRef.of(SchemaDocument.class);
+    PropertyRef<SchemaDocument, Long> documentId = documents.property("id", Long.class);
+
+    FluentSelect<SchemaDocument> byId = FluentSelect.from(documents).orderBy(documentId.asc());
+
+    StepVerifier.create(executor.page(byId, PageRequest.of(0, 1)))
+        .assertNext(
+            page -> {
+              assertThat(page.getTotalElements()).isEqualTo(2L);
+              assertThat(page.getContent()).extracting(document -> document.name).containsExactly("first");
+            })
+        .verifyComplete();
+
+    FluentSelect<SchemaDocument> joinedToAccounts =
+        FluentSelect.from(documents)
+            .join(ACCOUNT)
+            .on(documentId.eq(accountId()))
+            .orderBy(documentId.asc());
+
+    StepVerifier.create(executor.count(joinedToAccounts)).expectNext(2L).verifyComplete();
+  }
+
+  /**
+   * This library splits the dotted spelling, not the mapping context, so only executing it proves
+   * the two halves name a relation the database resolves.
+   */
+  @Test
+  void aDottedSpellingReachesTheSameRelationAsTheSchemaAttribute() {
+    assertReachesTheDocumentRelation(
+        EntityRef.of(DottedSchemaDocument.class), document -> document.name);
   }
 
   @Test

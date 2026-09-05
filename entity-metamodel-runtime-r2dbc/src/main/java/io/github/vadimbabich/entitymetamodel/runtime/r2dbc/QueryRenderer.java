@@ -212,7 +212,7 @@ public final class QueryRenderer {
 
     // Quoted: an alias derived from a class named Order or User is a keyword, and unquoted it
     // makes the statement unparseable rather than merely odd.
-    return Table.create(persistentEntity.getTableName())
+    return Table.create(TableNameResolver.resolve(persistentEntity))
         .as(SqlIdentifier.quoted(aliases.aliasOf(instance)));
   }
 

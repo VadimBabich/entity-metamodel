@@ -3,7 +3,6 @@ package io.github.vadimbabich.entitymetamodel.runtime;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.regex.Pattern;
-import org.springframework.data.relational.core.mapping.RelationalMappingContext;
 
 /**
  * Immutable, instance-scoped handle to an entity type. The default instance and any
@@ -90,15 +89,6 @@ public final class EntityRef<E> {
 
   public String alias() {
     return alias;
-  }
-
-  /**
-   * Resolves the table name through the context, never cached here.
-   */
-  public String tableName(RelationalMappingContext mappingContext) {
-    Objects.requireNonNull(mappingContext, "mappingContext");
-
-    return mappingContext.getRequiredPersistentEntity(entityType).getTableName().getReference();
   }
 
   @Override

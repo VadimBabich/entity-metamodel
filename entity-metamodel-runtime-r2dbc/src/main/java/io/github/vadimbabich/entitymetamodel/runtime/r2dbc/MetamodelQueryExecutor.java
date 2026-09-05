@@ -129,11 +129,13 @@ public final class MetamodelQueryExecutor {
   public Mono<Long> count(FluentSelect<?> select) {
     Objects.requireNonNull(select, "select");
 
-    RenderedStatement statement = renderer.renderCount(select);
+    return totalFrom(renderer.renderCount(select));
+  }
 
-    // By position, because the count column's name is the dialect's business; a null is a driver
-    // fault rather than a zero. first() rather than one(): a COUNT without GROUP BY returns one row
-    // by construction, and one() would reshape a binding fault into "non unique result".
+  // By position, because the count column's name is the dialect's business; a null is a driver
+  // fault rather than a zero. first() rather than one(): a COUNT without GROUP BY returns one row
+  // by construction, and one() would reshape a binding fault into "non unique result".
+  private Mono<Long> totalFrom(RenderedStatement statement) {
     return bind(statement)
         .map(row -> Objects.requireNonNull(row.get(0, Long.class), "count value"))
         .first();
@@ -191,9 +193,17 @@ public final class MetamodelQueryExecutor {
         () -> {
           FluentSelect<?> onePage = pageableTranslator.applyTo(select, pageable);
 
+          // Rendered here rather than in the branch that needs it: a dynamically resolved name
+          // would otherwise be read again on the thread that delivered the last row, and the total
+          // would count a relation the content never came from. Rendering performs no I/O, so a
+          // page that elides the count discards a statement rather than paying for one.
+          RenderedStatement total = renderer.renderCount(select);
+
           // Sequential, not zipped: inside a transaction both statements share one connection, and
           // two at once on one connection is a protocol error.
-          return all(onePage, mapper).collectList().flatMap(rows -> pageOf(rows, select, pageable));
+          return all(onePage, mapper)
+              .collectList()
+              .flatMap(rows -> pageOf(rows, total, select, pageable));
         });
   }
 
@@ -258,30 +268,31 @@ public final class MetamodelQueryExecutor {
   }
 
   private <R> Mono<Page<R>> pageOf(
-      List<R> rows, FluentSelect<?> select, Pageable pageable) {
+      List<R> rows, RenderedStatement total, FluentSelect<?> select, Pageable pageable) {
 
     if (pageable.isUnpaged()) {
-      return unpagedPageOf(rows, select, pageable);
+      return unpagedPageOf(rows, total, select, pageable);
     }
 
     // The substrate skips the count wherever the rows in hand already determine the total. Sound
     // only because the request brought the window, which means rejectWindowCollision has already
     // proved the description carries none of its own. Deferred because getPage does not subscribe
-    // the count on every branch, while count(select) renders its statement in its own body.
-    return ReactivePageableExecutionUtils.getPage(rows, pageable, Mono.defer(() -> count(select)));
+    // the count on every branch; the statement it would run is already rendered.
+    return ReactivePageableExecutionUtils.getPage(
+        rows, pageable, Mono.defer(() -> totalFrom(total)));
   }
 
   // Not delegated: the substrate's unpaged branch reports the rows in hand as the total, which
   // fabricates one whenever the description carries a window of its own — an offset as much as a
   // limit.
   private <R> Mono<Page<R>> unpagedPageOf(
-      List<R> rows, FluentSelect<?> select, Pageable pageable) {
+      List<R> rows, RenderedStatement total, FluentSelect<?> select, Pageable pageable) {
 
     if (select.limit().isEmpty() && select.offset().isEmpty()) {
       return Mono.just(new PageImpl<>(rows, pageable, rows.size()));
     }
 
-    return count(select).map(matchedRows -> new PageImpl<>(rows, pageable, matchedRows));
+    return totalFrom(total).map(matchedRows -> new PageImpl<>(rows, pageable, matchedRows));
   }
 
   private DatabaseClient.GenericExecuteSpec bind(RenderedStatement statement) {
