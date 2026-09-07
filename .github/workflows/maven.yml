@@ -37,6 +37,7 @@ defaults:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -44,6 +45,8 @@ jobs:
     name: Build and test (JDK ${{ matrix.java }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up JDK ${{ matrix.java }}
         uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
@@ -53,7 +56,7 @@ jobs:
           cache: 'maven'
 
       - name: Build and test
-        run: mvn -B verify
+        run: ./mvnw -B verify
 
       - name: Upload test reports
         if: failure()
@@ -71,9 +74,12 @@ jobs:
   # comparison is a designed follow-up, deliberately not gated here.
   reproducibility:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     name: Reproducible build check
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up JDK 21
         uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
@@ -84,13 +90,36 @@ jobs:
 
       - name: Build twice and compare jar digests
         run: |
-          mvn -B clean package -DskipTests
+          ./mvnw -B clean package -DskipTests
           find . -path '*/target/*.jar' -not -path '*/it/*' -print0 | sort -z \
             | xargs -0 sha256sum > "$RUNNER_TEMP/first-build.sha256"
           # An empty digest file compares equal to an empty digest file: without this the gate
           # reports green when the jar glob stops matching (module move, target override).
           test -s "$RUNNER_TEMP/first-build.sha256"
-          mvn -B clean package -DskipTests
+          ./mvnw -B clean package -DskipTests
           find . -path '*/target/*.jar' -not -path '*/it/*' -print0 | sort -z \
             | xargs -0 sha256sum > "$RUNNER_TEMP/second-build.sha256"
           diff "$RUNNER_TEMP/first-build.sha256" "$RUNNER_TEMP/second-build.sha256"
+
+  # The gate is POM-bound, so every matrix cell above already enforces it; this job exists to be
+  # the named check for branch protection and an API-break signal that does not wait for
+  # PostgreSQL. Both skip flags are load-bearing: failsafe keeps running under -DskipTests alone,
+  # so without -DskipITs this job starts the container suite it exists to avoid.
+  api-compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    name: Revapi check (JDK 21)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Run the API compatibility gate
+        run: ./mvnw -B -DskipTests -DskipITs verify

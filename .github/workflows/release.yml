@@ -38,6 +38,7 @@ defaults:
 
 jobs:
   preflight:
+    timeout-minutes: 10
     name: Preflight
     runs-on: ubuntu-latest
     permissions:
@@ -114,7 +115,33 @@ jobs:
 
           echo "v$VERSION already tags this commit — treating this run as a resumption."
 
+      # GitHub auto-creates an unknown environment with no rules, and no file in git can carry a
+      # protection rule, so an unconfigured gate would be inert. Fail closed here rather than
+      # discover that after the bundle is VALIDATED.
+      - name: Require the github-release approval gate
+        if: inputs.dry_run == false
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! reviewer_rules="$(gh api "repos/$GITHUB_REPOSITORY/environments/github-release" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')"; then
+            echo "::error::The 'github-release' environment does not exist yet. Create it in the"\
+                 "repository settings with a required-reviewer rule before a real release: it is"\
+                 "what holds the tag back until the Central Portal decision."
+            exit 1
+          fi
+
+          if [ "$reviewer_rules" -eq 0 ]; then
+            echo "::error::The 'github-release' environment has no required-reviewer rule, so the"\
+                 "tag and GitHub release would land before the Central Portal decision. Add the"\
+                 "rule in the repository settings, then re-dispatch."
+            exit 1
+          fi
+
+          echo "github-release approval gate is armed ($reviewer_rules reviewer rule(s))."
+
   deploy:
+    timeout-minutes: 45
     name: Deploy to the Central Portal
     needs: preflight
     runs-on: ubuntu-latest
@@ -177,7 +204,7 @@ jobs:
         run: |
           STAMP="$(TZ=UTC0 git log -1 --date=iso-strict-local --format=%cd "$GITHUB_SHA")"
           echo "Stamping project.build.outputTimestamp=$STAMP"
-          mvn -B -q org.codehaus.mojo:versions-maven-plugin:2.21.0:set-property \
+          ./mvnw -B -q versions:set-property \
             -Dproperty=project.build.outputTimestamp \
             -DnewVersion="$STAMP" \
             -DgenerateBackupPoms=false
@@ -194,7 +221,7 @@ jobs:
       # -DnewVersion=<the tag name without the v>.
       - name: Set the family version ephemerally
         run: |
-          mvn -B -q org.codehaus.mojo:versions-maven-plugin:2.21.0:set \
+          ./mvnw -B -q versions:set \
             -DnewVersion="$VERSION" -DgenerateBackupPoms=false
 
       # The whole reactor deploys: it is one version line and the BOM promises every module in it,
@@ -212,7 +239,7 @@ jobs:
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
         run: |
-          mvn -B -Prelease -Dgpg.skip=false -Dexpected.release.version="$VERSION" clean deploy
+          ./mvnw -B -Prelease -Dgpg.skip=false -Dexpected.release.version="$VERSION" clean deploy
 
       - name: Collect the SBOMs
         run: |
@@ -254,7 +281,9 @@ jobs:
             echo ""
             echo "1. Open the Central Portal deployments view and confirm the bundle is VALIDATED."
             echo "2. Dry run: **drop** it. Real release: **publish** it — that step is irreversible."
-            echo "3. Then work the post-release checklist (changelog heading, README pin, roadmap date)."
+            echo "3. Real release: approve the 'github-release' environment so the tag and GitHub"
+            echo "   release land — after the Portal decision, never before."
+            echo "4. Then work the post-release checklist (changelog heading, README pin, roadmap date)."
             echo ""
             echo "If a later step failed, re-dispatch the same version: every step after the deploy"
             echo "is re-runnable. If Central has already **published** it, the duplicate deploy will"
@@ -272,6 +301,7 @@ jobs:
   # digest mismatch becoming an error, which is the behaviour worth having here. Aligning the
   # majors would guard today's pairing; being exercised by every dry run guards every future one.
   verify-handoff:
+    timeout-minutes: 10
     name: Verify the publish inputs
     needs: deploy
     runs-on: ubuntu-latest
@@ -320,6 +350,10 @@ jobs:
     needs: verify-handoff
     if: inputs.dry_run == false
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Gated so the two irreversible acts happen in order: publish in the Portal, then approve
+    # here. A dropped bundle then never gets a public tag, and its version is not burned.
+    environment: github-release
     # The only job that writes to the repository, and it runs no build.
     permissions:
       contents: write

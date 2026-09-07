@@ -91,7 +91,7 @@
           <systemPropertyVariables>
             <!-- The test reads its sibling modules' POMs, so it needs the reactor root as a
                  fact rather than as an assumption about the working directory. -->
-            <reactor.root>${project.basedir}/..</reactor.root>
+            <maven.reactor.root>${project.basedir}/..</maven.reactor.root>
           </systemPropertyVariables>
         </configuration>
         <executions>

@@ -22,6 +22,7 @@ import io.github.vadimbabich.entitymetamodel.runtime.Condition;
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import io.github.vadimbabich.entitymetamodel.runtime.ExpressionSort;
 import io.github.vadimbabich.entitymetamodel.runtime.JoinRef;
+import io.github.vadimbabich.entitymetamodel.runtime.NonUniqueRowException;
 import io.github.vadimbabich.entitymetamodel.runtime.PropertyRef;
 import io.github.vadimbabich.entitymetamodel.runtime.SqlExpr;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
@@ -64,6 +65,7 @@ import org.springframework.data.relational.core.query.Query;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import reactor.blockhound.BlockHound;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -100,6 +102,21 @@ class MetamodelQueryExecutorIT {
 
   @BeforeAll
   static void startDatabase() {
+    // BlockHound ignores every install after the first, so a second IT class adds its allowances
+    // here rather than calling install() itself. Both allowances name the shared caller, not the
+    // blocking leaf: spring-core reads the projection's class file through a JDK-24-only class on
+    // 24+ and through ASM on 17/21, so an allowance on either reader goes inert on the other
+    // matrix cells. That read costs one disk hit per projection type, on the event loop.
+    BlockHound.install(
+        integration ->
+            integration
+                .allowBlockingCallsInside(
+                    "io.r2dbc.postgresql.authentication.SASLAuthenticationHandler",
+                    "handleAuthenticationSASL")
+                .allowBlockingCallsInside(
+                    "org.springframework.data.projection.DefaultProjectionInformation$PropertyDescriptorSource",
+                    "getMetadata"));
+
     postgres = new PostgreSQLContainer("postgres:16-alpine");
     postgres.start();
 
@@ -453,9 +470,29 @@ class MetamodelQueryExecutorIT {
         .expectErrorSatisfies(
             tooMany ->
                 assertThat(tooMany)
-                    .isInstanceOf(IllegalStateException.class)
+                    .isInstanceOf(NonUniqueRowException.class)
                     .hasMessageContaining("more than one row")
                     .hasMessageContaining("first("))
+        .verify();
+  }
+
+  @Test
+  void aMapperReadingAnAbsentSideDoesNotWearTheAmbiguityType() {
+    JoinRef<Membership, Account> owner = owningAccount();
+
+    FluentSelect<Membership> unmatched =
+        FluentSelect.from(MEMBERSHIP)
+            .leftOuterJoin(owner)
+            .alsoSelect(ACCOUNT)
+            .where(MEMBERSHIP.property("id", Long.class).is(13L));
+
+    StepVerifier.create(executor.one(unmatched, row -> row.read(ACCOUNT)))
+        .expectErrorSatisfies(
+            absentSide ->
+                assertThat(absentSide)
+                    .isInstanceOf(IllegalStateException.class)
+                    .isNotInstanceOf(NonUniqueRowException.class)
+                    .hasMessageContaining("readOptional"))
         .verify();
   }
 
@@ -1309,7 +1346,7 @@ class MetamodelQueryExecutorIT {
         .expectErrorSatisfies(
             tooMany ->
                 assertThat(tooMany)
-                    .isInstanceOf(IllegalStateException.class)
+                    .isInstanceOf(NonUniqueRowException.class)
                     .hasMessageContaining("more than one row"))
         .verify();
   }

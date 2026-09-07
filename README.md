@@ -4,8 +4,9 @@ Generate a metamodel from your Spring Data entities while they compile, then bui
 queries — joins included — that the compiler checks.
 
 > **Nothing is on Maven Central yet.** There is no artifact there to depend on: you build it from
-> source, and the public API can still change. Everything below runs today and is held by tests on
-> every build. [Where it's going](#where-its-going) has the bar for a first release.
+> source. Everything below runs today and is held by tests on every build, and the public API froze
+> on 2026-09-06 — though the compatibility promise only starts with the first published version.
+> [Where it's going](#where-its-going) has the bar for that release.
 
 ## The problem
 
@@ -51,8 +52,8 @@ This participates in compilation instead:
 
 ## Five minutes
 
-An ordinary Spring Data entity. This one is from the committed corpus, so what follows is exactly
-what the processor emits for it:
+An ordinary Spring Data entity. This one is from the committed corpus, so the metamodel below is
+the real output — trimmed only of its private constructor:
 
 ```java
 @Table("accounts")
@@ -171,7 +172,9 @@ the fragment is for. `save` and `deleteById` still go through Spring's own machi
   builds and Maven + Gradle + IDE support from one artifact — no build-tool plugin to maintain.
 - **A description is a value.** `FluentSelect` is immutable and performs no I/O; rendering it is a
   pure function. The library never schedules, times out, retries, caches or opens a transaction, and
-  no Spring SQL type appears in a public signature — those decisions stay yours.
+  no Spring SQL type appears in a public signature — those decisions stay yours. None of that is
+  prose alone: architecture tests ban the blocking, scheduling and rendering-type leaks, and every
+  build diffs the public API through Revapi.
 - **A closed algebra.** The query surface was derived from measured usage in real codebases and
   stops where full SQL begins. It does not wrap your repositories, replace your converters or ask
   you to adopt a query language. That boundary is what keeps it small enough to be correct.
@@ -239,7 +242,9 @@ keyset pagination among them.
   Post-read logic belongs in the mapper the executor takes.
 - **Projections are checked one way only.** An interface projection is checked against the entity
   and an open `@Value` one is refused; a DTO is bound by Spring itself and passed through unchecked,
-  so a stale field there reads null.
+  so a stale field there reads null. The first `readProjection` per projection type also pays a
+  one-time cost: Spring's introspection reads the projection's class file from disk on the event
+  loop, cached afterwards.
 - **Schema resolution has sharp edges.** A `NamingStrategy` default is resolved once per entity and
   cached, so it cannot route per tenant — a schema that must vary belongs on `@Table` as SpEL. A
   dotted `@Table("a.b")` reads as schema `a`, table `b`, which silently targets the wrong relation
@@ -256,7 +261,11 @@ keyset pagination among them.
   module leaves the consuming module up to date, so its metamodels are not rewritten. The bound is
   that columns resolve at use: a renamed property throws from `PropertyRef.columnName` rather than
   querying the wrong column.
-- **No compatibility promise yet.** Signatures can still change until the API freeze.
+- **Frozen, not yet released.** The public signatures of `core`, `runtime` and `runtime-r2dbc`
+  froze on 2026-09-06 and every build runs a compatibility gate over them (Revapi plus
+  architecture tests pinning the exact foreign types a public signature may carry). The
+  consumer-facing promise starts with the first published version — nothing is on Maven Central
+  yet.
 
 ## Compared with the alternatives
 
@@ -281,7 +290,8 @@ without conflict, precisely because this one stops where full SQL begins.
 ## Requirements and installation
 
 - **Java 17+.** CI builds on 17, 21 and 25.
-- **Maven 3.9+** to build from source. The enforcer fails the build below it.
+- **No Maven install required.** `./mvnw` pins the build to Maven 3.9.11. If you use your own
+  Maven, the enforcer floor is 3.9.
 - **Spring Data 4.0.x–4.1.x** (`spring-data-relational` / `spring-data-r2dbc`). Applications on the
   3.5.x line have to upgrade first.
 - **Any build that runs javac.** There is no build-tool plugin to install.
@@ -291,10 +301,10 @@ Nothing is on Maven Central, so install it into your local repository first:
 ```bash
 git clone https://github.com/VadimBabich/entity-metamodel.git
 cd entity-metamodel
-mvn -B install
+./mvnw -B install
 ```
 
-`mvn -B verify` additionally runs the integration tests: the query suite executes its statements
+`./mvnw -B verify` additionally runs the integration tests: the query suite executes its statements
 against PostgreSQL in Testcontainers (skipped with a notice when Docker is unavailable locally).
 
 ### Maven
@@ -369,8 +379,9 @@ delegated Maven or Gradle build is the reliable path today.
 
 **Nothing goes to Maven Central until it is whole.** Maven Central is permanent, so the first
 release will be a version you can run end to end — generate a metamodel, build a query, execute it —
-rather than a milestone of parts. What stands between here and that release is freeze and packaging
-work rather than core function; API compatibility gating is the next station.
+rather than a milestone of parts. The API froze on 2026-09-06 behind a compatibility gate that runs
+in every build; what is left is packaging work, and the next step is a release candidate cut from
+`master` by the workflow below.
 
 When it does ship, each release is cut by a dispatch-only workflow that signs the artifacts,
 attaches their CycloneDX SBOMs to the GitHub release, and attests build provenance — so a jar

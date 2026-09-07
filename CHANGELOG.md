@@ -9,6 +9,27 @@ and `@RawSql` markers, and the annotation processor that generates metamodels. T
 substrate is `spring-data-relational` / `spring-data-r2dbc` 4.0.x–4.1.x, the lines still in OSS
 support, so an application on the 3.5.x line upgrades before adopting the runtime.
 
+**The public API is frozen (2026-09-06) and mechanically gated.** The public signatures of `core`,
+`runtime` and `runtime-r2dbc` are held by a compatibility gate that runs inside `mvn verify` and in
+CI: Revapi compares every build against the latest released version — until a first release exists
+it compares against an empty baseline, which is exactly what lets its foreign-type check enforce
+from day one — and per-module architecture tests pin the precise admit list of non-JDK types allowed
+on a public signature, the ban on Spring's rendering internals, and the reactive prohibitions
+(no blocking, scheduling, subscribing or error-swallowing in library code). Intentional breaks,
+once something is published, ride an auditable justification ledger in the module's build
+configuration. Two API touches landed with the freeze: the ambiguity refusal in the `one(…)`
+terminals now raises an owned `NonUniqueRowException` (an `IllegalStateException` subtype), so
+catching it no longer swallows the distinct fault of reading a side an outer join did not match —
+that one stays a plain `IllegalStateException` — and the generation SPI's reporting seam gained
+`warning(String)`, mapped to the compiler's warning level by the processor. One accepted
+source-level quirk enters the frozen baseline: `all(select, null)` with an untyped `null` is a
+compile-time ambiguity between the paging and mapper overloads; it previously compiled into a
+guaranteed runtime failure, so the ambiguity is the better error. The integration suite also runs
+under a blocking-call detector; it found, and the docs now carry, one substrate behavior worth
+knowing: Spring Data's projection introspection reads the projection's class file from disk on
+first use per type, on the event loop, cached afterwards — a first-call latency cost on
+`readProjection`.
+
 **`entity-metamodel-processor` generates.** It reads `@Table` types through `javax.lang.model`
 rather than by parsing sources — discovery needs the `@Table` annotation itself, since the compiler
 does not present types annotated with a stereotype composed over it, though such a type *is*

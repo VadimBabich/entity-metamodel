@@ -1,6 +1,7 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
+import io.github.vadimbabich.entitymetamodel.runtime.NonUniqueRowException;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -120,8 +121,9 @@ public final class MetamodelQueryExecutor {
   }
 
   /**
-   * The single matching row: empty when nothing matches, an error when more than one does. Choosing
-   * arbitrarily between candidates is what {@link #first(FluentSelect)} is for.
+   * The single matching row: empty when nothing matches, a {@link NonUniqueRowException} when more
+   * than one does. Choosing arbitrarily between candidates is what {@link #first(FluentSelect)} is
+   * for.
    */
   public <E> Mono<E> one(FluentSelect<E> select) {
     Objects.requireNonNull(select, "select");
@@ -133,9 +135,9 @@ public final class MetamodelQueryExecutor {
    * The mapper form, for a row carrying more than one instance. Nothing matching, one match and
    * several behave as they do for {@link #one(FluentSelect)}.
    *
-   * <p>The ambiguity refusal and {@link ProjectedRow#read(EntityRef)} on an instance an outer join
-   * did not match both raise {@code IllegalStateException}, so catching that type broadly here
-   * turns a mapper bug into an empty answer.
+   * <p>Catch {@link NonUniqueRowException}, not {@code IllegalStateException}: the wider type also
+   * covers {@link ProjectedRow#read(EntityRef)} on an instance an outer join did not match, so
+   * catching it turns a mapper bug into an empty answer.
    */
   public <R> Mono<R> one(FluentSelect<?> select, Function<ProjectedRow, R> mapper) {
     Objects.requireNonNull(select, "select");
@@ -156,7 +158,7 @@ public final class MetamodelQueryExecutor {
     }
     if (rows.size() > 1) {
       return Mono.error(
-          new IllegalStateException(
+          new NonUniqueRowException(
               "This description matched more than one row; narrow the filter, or use first(...) to"
                   + " choose between candidates. A join to a to-many side matches once per"
                   + " counterpart"));

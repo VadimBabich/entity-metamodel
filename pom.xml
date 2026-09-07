@@ -65,9 +65,20 @@
     <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
     <maven-surefire-plugin.version>3.6.0</maven-surefire-plugin.version>
     <maven-failsafe-plugin.version>3.6.0</maven-failsafe-plugin.version>
+    <revapi-maven-plugin.version>0.15.1</revapi-maven-plugin.version>
+    <revapi-java.version>0.28.4</revapi-java.version>
+    <versions-maven-plugin.version>2.21.0</versions-maven-plugin.version>
+    <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
+    <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
+    <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
+    <cyclonedx-maven-plugin.version>2.9.3</cyclonedx-maven-plugin.version>
+    <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
 
     <junit.version>6.1.3</junit.version>
     <assertj-core.version>3.27.7</assertj-core.version>
+    <!-- Core API only, no archunit-junit5: the engine's support for the JUnit 6 platform is
+         unverified, and plain @Test methods over ArchRule.check need no engine at all. -->
+    <archunit.version>1.5.0</archunit.version>
     <!-- Supported substrate range is Spring Data 4.0.x-4.1.x. One property for all three of its
          artifacts on purpose: they ship as one release train, so a tool that bumps dependencies one
          at a time must not be able to produce a mixed set — that failure is a linkage error at
@@ -82,6 +93,7 @@
     <testcontainers.version>2.0.5</testcontainers.version>
     <r2dbc-postgresql.version>1.1.2.RELEASE</r2dbc-postgresql.version>
     <r2dbc-proxy.version>1.1.6.RELEASE</r2dbc-proxy.version>
+    <blockhound.version>1.0.17.RELEASE</blockhound.version>
     <netty.version>4.1.137.Final</netty.version>
   </properties>
 
@@ -120,6 +132,62 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-failsafe-plugin</artifactId>
           <version>${maven-failsafe-plugin.version}</version>
+        </plugin>
+
+        <!-- release.yml invokes versions:set unqualified, so this entry is what pins the version
+             it resolves - and what keeps that version visible to Dependabot. -->
+        <plugin>
+          <groupId>org.codehaus.mojo</groupId>
+          <artifactId>versions-maven-plugin</artifactId>
+          <version>${versions-maven-plugin.version}</version>
+        </plugin>
+
+        <!-- The API compatibility gate (adr-api-enforcement-tool). Modules opt in by declaring
+             the plugin; each carries its own revapi.differences block. Before the first Central
+             publication the plugin finds no released version and compares against an empty
+             archive, which is what lets externalClassExposedInAPI enforce from day one; the SemVer
+             half arms itself once RELEASE resolves. Never set failOnUnresolvedArtifacts or
+             failOnUnresolvedDependencies to true before then - that fallback is the mechanism.
+
+             The per-module raise items look centralizable here and are not, measured both ways: by
+             default a child's <differences> list replaces this one and the raise never reaches the
+             module, and with combine.children="append" it arrives first, where first-match-wins
+             makes it beat every admit. Leave each raise in its module, after that module's
+             admits. -->
+        <plugin>
+          <groupId>org.revapi</groupId>
+          <artifactId>revapi-maven-plugin</artifactId>
+          <version>${revapi-maven-plugin.version}</version>
+          <dependencies>
+            <dependency>
+              <groupId>org.revapi</groupId>
+              <artifactId>revapi-java</artifactId>
+              <version>${revapi-java.version}</version>
+            </dependency>
+          </dependencies>
+          <!-- failSeverity is deprecated, and its default mapping sends potentiallyBreaking and
+               breaking both to error. Demoting potentiallyBreaking to highlight leaves each
+               module's criticality raise as the only path to a failed build, so the gate fails by
+               construction rather than by default-mapping accident. -->
+          <configuration>
+            <failCriticality>error</failCriticality>
+            <pipelineConfiguration>
+              <severityMapping>
+                <equivalent>allowed</equivalent>
+                <nonBreaking>documented</nonBreaking>
+                <potentiallyBreaking>highlight</potentiallyBreaking>
+                <breaking>error</breaking>
+              </severityMapping>
+            </pipelineConfiguration>
+          </configuration>
+          <executions>
+            <execution>
+              <id>api-compat-check</id>
+              <goals>
+                <goal>check</goal>
+              </goals>
+            </execution>
+          </executions>
         </plugin>
       </plugins>
     </pluginManagement>
@@ -200,7 +268,7 @@
           <plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-source-plugin</artifactId>
-            <version>3.4.0</version>
+            <version>${maven-source-plugin.version}</version>
             <executions>
               <execution>
                 <id>attach-sources</id>
@@ -213,7 +281,7 @@
           <plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-javadoc-plugin</artifactId>
-            <version>3.12.0</version>
+            <version>${maven-javadoc-plugin.version}</version>
             <executions>
               <execution>
                 <id>attach-javadocs</id>
@@ -226,7 +294,7 @@
           <plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-gpg-plugin</artifactId>
-            <version>3.2.8</version>
+            <version>${maven-gpg-plugin.version}</version>
             <executions>
               <execution>
                 <id>sign-artifacts</id>
@@ -240,7 +308,7 @@
           <plugin>
             <groupId>org.cyclonedx</groupId>
             <artifactId>cyclonedx-maven-plugin</artifactId>
-            <version>2.9.3</version>
+            <version>${cyclonedx-maven-plugin.version}</version>
             <configuration>
               <outputName>${project.artifactId}-bom</outputName>
             </configuration>
@@ -257,7 +325,7 @@
           <plugin>
             <groupId>org.sonatype.central</groupId>
             <artifactId>central-publishing-maven-plugin</artifactId>
-            <version>0.11.0</version>
+            <version>${central-publishing-maven-plugin.version}</version>
             <extensions>true</extensions>
             <configuration>
               <publishingServerId>central</publishingServerId>

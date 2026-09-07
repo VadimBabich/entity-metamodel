@@ -10,6 +10,24 @@
 
   <artifactId>entity-metamodel-runtime-r2dbc</artifactId>
 
+  <properties>
+    <blockhound.attach.args/>
+  </properties>
+
+  <profiles>
+    <!-- JEP 451: from JDK 21 a dynamic agent attach warns unless allowed explicitly. The flag
+         reached 17 only in 17.0.12 and the floor is [17,), so it cannot be unconditional. -->
+    <profile>
+      <id>jdk-21-plus</id>
+      <activation>
+        <jdk>[21,)</jdk>
+      </activation>
+      <properties>
+        <blockhound.attach.args>-XX:+EnableDynamicAgentLoading</blockhound.attach.args>
+      </properties>
+    </profile>
+  </profiles>
+
   <name>Entity Metamodel Runtime (R2DBC)</name>
   <description>
     Reactive fluent query builder for Spring Data R2DBC: FluentSelect with
@@ -127,6 +145,22 @@
       <version>${r2dbc-proxy.version}</version>
       <scope>test</scope>
     </dependency>
+
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit</artifactId>
+      <version>${archunit.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- Reactive style §9/§10: an accidental blocking call in a chain fails the *IT suite rather
+         than degrading production silently. -->
+    <dependency>
+      <groupId>io.projectreactor.tools</groupId>
+      <artifactId>blockhound</artifactId>
+      <version>${blockhound.version}</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
@@ -136,6 +170,11 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-failsafe-plugin</artifactId>
+        <!-- BlockHound instruments via class redefinition, which JDK 13+ forks refuse without
+             this flag. The attach flag it also wants is conditional; see the profile above. -->
+        <configuration>
+          <argLine>-XX:+AllowRedefinitionToAddDeleteMethods ${blockhound.attach.args}</argLine>
+        </configuration>
         <executions>
           <execution>
             <goals>
@@ -144,6 +183,42 @@
             </goals>
           </execution>
         </executions>
+      </plugin>
+
+      <plugin>
+        <groupId>org.revapi</groupId>
+        <artifactId>revapi-maven-plugin</artifactId>
+        <configuration>
+          <analysisConfiguration>
+            <revapi.differences>
+              <differences>
+                <!-- Order is load-bearing: the recipe transform is first-match-wins, so the admit
+                     must precede the raise or it would never apply. Admits are namespaces rather
+                     than type lists because the check reports the whole closure the admitted roots
+                     drag in; per-type policy lives in ArchitectureRulesTest. The sibling pattern
+                     matches top-level types only - if a nested runtime type ever enters the
+                     closure, append (\.[A-Za-z0-9]+)* to that alternative rather than reordering
+                     these items. -->
+                <item>
+                  <ignore>true</ignore>
+                  <regex>true</regex>
+                  <code>java\.class\.externalClassExposedInAPI</code>
+                  <new>(class|interface|enum|@interface) (org\.springframework\..*|reactor\..*|io\.r2dbc\.spi\..*|org\.reactivestreams\..*|io\.github\.vadimbabich\.entitymetamodel\.runtime\.[A-Za-z0-9]+(&lt;.*&gt;)?)</new>
+                  <justification>The execution module is the designated adapter surface: the
+                    substrate-range and escape-hatch ADRs admit these namespaces here, and the
+                    sibling vocabulary is this family's own API.</justification>
+                </item>
+                <item>
+                  <code>java.class.externalClassExposedInAPI</code>
+                  <criticality>error</criticality>
+                  <justification>Any dependency type outside the admitted namespaces reaching the
+                    public surface is a leak; Tier-S types never appear even inside them, enforced
+                    at signature level by ArchitectureRulesTest.</justification>
+                </item>
+              </differences>
+            </revapi.differences>
+          </analysisConfiguration>
+        </configuration>
       </plugin>
 
       <plugin>

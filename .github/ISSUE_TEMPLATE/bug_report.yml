@@ -1,12 +1,12 @@
 name: Bug report
-description: Something the plugin does wrong — generation failure, wrong output, build breakage.
+description: Something the processor or runtime does wrong — generation failure, wrong SQL, wrong output, build breakage.
 labels: ["bug"]
 body:
   - type: input
-    id: plugin-version
+    id: family-version
     attributes:
-      label: Plugin version
-      placeholder: "1.0.0"
+      label: entity-metamodel version
+      placeholder: "2.0.0"
     validations:
       required: true
   - type: input
@@ -20,14 +20,14 @@ body:
     id: spring-versions
     attributes:
       label: Spring Data Relational / R2DBC versions
-      placeholder: "spring-data-relational 4.0.3, spring-data-r2dbc 4.0.3"
+      placeholder: "spring-data-relational 4.1.1, spring-data-r2dbc 4.1.1"
     validations:
       required: false
   - type: textarea
     id: entity-sample
     attributes:
       label: Minimal entity sample
-      description: The smallest entity class (or classes) that reproduces the problem.
+      description: The smallest entity class (or classes) — plus the query description, if the bug is in the query runtime — that reproduces the problem.
       render: java
     validations:
       required: true
@@ -35,6 +35,6 @@ body:
     id: expected-actual
     attributes:
       label: Expected vs actual
-      description: What you expected the plugin to generate or do, and what happened instead. Include the relevant build log lines.
+      description: What you expected it to generate, render or return, and what happened instead. Include the relevant build log lines or the rendered SQL from RenderedStatement.preview().
     validations:
       required: true
