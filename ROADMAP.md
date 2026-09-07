@@ -1,6 +1,6 @@
 # Roadmap
 
-As of 2026-09-05. Updated when direction changes, reviewed at least once per release cycle.
+As of 2026-09-06. Updated when direction changes, reviewed at least once per release cycle.
 
 ## Where the project is
 
@@ -12,20 +12,25 @@ history and in its own tags.
 ## Where it is going
 
 A **2.0 reboot** replaces the source-parsing Maven plugin with a **JSR-269 annotation processor**
-plus a small owned runtime library. Every part is built; what stands between here and a first
-release is freeze and packaging work, not core function:
+plus a small owned runtime library. Every part is built and the public API froze on 2026-09-06;
+what stands between here and a first release is packaging and release work, not core function:
 
 - **Runtime library** — typed references (`EntityRef` / `PropertyRef` / `JoinRef`) that generated
-  metamodels compile against, with no framework types in the public API surface. *Built.*
+  metamodels compile against. No Spring SQL type appears in any public signature, and the few
+  admitted framework types are pinned by an architecture test. *Built, frozen.*
 - **Annotation processor** — build-tool-neutral generation (Maven, Gradle, IDE builds),
   incremental-compilation aware. *Built, generating the frozen shape.*
 - **Fluent query surface** — typed, composable `SELECT` construction over Spring Data R2DBC,
   including joins, driven by the generated metamodel. Paging covers `Page`, the count-free `Slice`
   and a streaming window; keyset (cursor) scrolling is deliberately not built, and the README's
   query recipes carry the answer that serves it meanwhile. *Built
-  (`entity-metamodel-runtime-r2dbc`), executing against a real PostgreSQL in its integration
-  suite.*
+  (`entity-metamodel-runtime-r2dbc`), frozen, executing against a real PostgreSQL in its
+  integration suite.*
 - **BOM** — one aligned version for the whole family. *Built.*
+
+A relationship-annotation module (`@References`) is deliberately post-2.0.0: the aligned version
+policy makes a new artifact and its BOM row an additive minor, so it waits for usage evidence
+rather than holding the release.
 
 Nothing is on Maven Central yet, deliberately: the first release there will be a version that runs
 end to end — generate a metamodel, build a query, execute it — not a milestone of parts nobody can
@@ -36,7 +41,8 @@ drift.
 ## What guides the order
 
 Correctness gates before features: the generated-shape freeze and the incremental-compilation
-decision precede any 2.0 publication, and API/SPI compatibility gating precedes **2.0.0 itself**.
+decision preceded any 2.0 publication, and API/SPI compatibility gating preceded **2.0.0 itself** —
+it now runs in every build, and the API froze behind it on 2026-09-06.
 Milestones are deliberately outside that guarantee — that is what the `-M` qualifier buys, and why
 the processor reaches output parity against the golden corpus before GA rather than before M1.
 

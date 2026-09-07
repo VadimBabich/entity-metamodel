@@ -48,6 +48,25 @@
           </archive>
         </configuration>
       </plugin>
+
+      <plugin>
+        <groupId>org.revapi</groupId>
+        <artifactId>revapi-maven-plugin</artifactId>
+        <configuration>
+          <analysisConfiguration>
+            <revapi.differences>
+              <differences>
+                <item>
+                  <code>java.class.externalClassExposedInAPI</code>
+                  <criticality>error</criticality>
+                  <justification>The model and SPI surface is JDK-pure by the governance doc's
+                    core row; any foreign type here is a leak, not a candidate.</justification>
+                </item>
+              </differences>
+            </revapi.differences>
+          </analysisConfiguration>
+        </configuration>
+      </plugin>
     </plugins>
   </build>
 

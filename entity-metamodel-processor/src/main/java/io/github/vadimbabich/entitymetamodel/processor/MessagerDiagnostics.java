@@ -1,11 +1,14 @@
 package io.github.vadimbabich.entitymetamodel.processor;
 
 import io.github.vadimbabich.entitymetamodel.core.GenerationDiagnostics;
+
 import javax.annotation.processing.Messager;
 import javax.lang.model.element.Element;
 import javax.tools.Diagnostic;
 
-/** Adapts the reporting seam to the compiler, anchoring every message to the entity generated. */
+/**
+ * Adapts the reporting seam to the compiler, anchoring every message to the entity generated.
+ */
 final class MessagerDiagnostics implements GenerationDiagnostics {
 
   private final Messager messager;
@@ -19,6 +22,11 @@ final class MessagerDiagnostics implements GenerationDiagnostics {
   @Override
   public void note(String message) {
     messager.printMessage(Diagnostic.Kind.NOTE, message, anchor);
+  }
+
+  @Override
+  public void warning(String message) {
+    messager.printMessage(Diagnostic.Kind.WARNING, message, anchor);
   }
 
   @Override

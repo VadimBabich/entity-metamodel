@@ -9,5 +9,11 @@ public interface GenerationDiagnostics {
 
   void note(String message);
 
+  /**
+   * No generator emits one yet. The level is carried because this interface is frozen and gated,
+   * so adding one later would break every implementor.
+   */
+  void warning(String message);
+
   void error(String message);
 }

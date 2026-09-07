@@ -31,19 +31,20 @@ import org.xml.sax.SAXException;
  */
 class BomCoversTheReactorTest {
 
-  private static final String REACTOR_ROOT_PROPERTY = "reactor.root";
-  private static final Path REACTOR_ROOT = Path.of(System.getProperty(REACTOR_ROOT_PROPERTY, ".."));
-  private static final Path REACTOR_ROOT_POM = REACTOR_ROOT.resolve("pom.xml");
+  private static final String MAVEN_REACTOR_ROOT_PROPERTY = "maven.reactor.root";
+  private static final Path MAVEN_REACTOR_ROOT =
+      Path.of(System.getProperty(MAVEN_REACTOR_ROOT_PROPERTY, ".."));
+  private static final Path MAVEN_REACTOR_ROOT_POM = MAVEN_REACTOR_ROOT.resolve("pom.xml");
   private static final Path BOM_POM = Path.of("pom.xml");
   private static final String BOM_ARTIFACT_ID = "entity-metamodel-bom";
   private static final String REACTOR_VERSION_REFERENCE = "${project.version}";
 
   @Test
   void theReactorRootIsReadable() {
-    assertThat(REACTOR_ROOT_POM).as("reactor root POM, resolved to %s — without it every "
+    assertThat(MAVEN_REACTOR_ROOT_POM).as("reactor root POM, resolved to %s — without it every "
         + "assertion below examines nothing and passes. Surefire supplies the root as -D%s; "
         + "outside Maven this falls back to '..' relative to the working directory.",
-        REACTOR_ROOT_POM.toAbsolutePath(), REACTOR_ROOT_PROPERTY).exists();
+        MAVEN_REACTOR_ROOT_POM.toAbsolutePath(), MAVEN_REACTOR_ROOT_PROPERTY).exists();
 
     assertThat(familyGroupId()).as("reactor groupId").isNotEmpty();
     assertThat(moduleDirectories()).as("reactor modules").isNotEmpty();
@@ -52,7 +53,7 @@ class BomCoversTheReactorTest {
   @Test
   void everyModuleDeclaredByTheReactorIsReadable() {
     for (String directory : moduleDirectories()) {
-      Path modulePom = REACTOR_ROOT.resolve(directory).resolve("pom.xml");
+      Path modulePom = MAVEN_REACTOR_ROOT.resolve(directory).resolve("pom.xml");
 
       assertThat(modulePom).as("POM of declared module '%s'", directory).exists();
       assertThatCode(() -> documentRoot(modulePom))
@@ -96,7 +97,7 @@ class BomCoversTheReactorTest {
     for (String directory : moduleDirectories()) {
       // Maven lets a directory name and an artifactId diverge, so the coordinate has to come from
       // the module's own POM rather than from the module list.
-      Element modulePom = documentRoot(REACTOR_ROOT.resolve(directory).resolve("pom.xml"));
+      Element modulePom = documentRoot(MAVEN_REACTOR_ROOT.resolve(directory).resolve("pom.xml"));
       String artifactId = childText(modulePom, "artifactId");
 
       if (!BOM_ARTIFACT_ID.equals(artifactId)) {
@@ -125,11 +126,11 @@ class BomCoversTheReactorTest {
   }
 
   private String familyGroupId() {
-    return childText(documentRoot(REACTOR_ROOT_POM), "groupId");
+    return childText(documentRoot(MAVEN_REACTOR_ROOT_POM), "groupId");
   }
 
   private List<String> moduleDirectories() {
-    Element modules = childElement(documentRoot(REACTOR_ROOT_POM), "modules");
+    Element modules = childElement(documentRoot(MAVEN_REACTOR_ROOT_POM), "modules");
     List<String> directories = new ArrayList<>();
 
     for (Element module : childElements(modules, "module")) {

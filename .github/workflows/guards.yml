@@ -32,10 +32,12 @@ jobs:
   secrets:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0          # gitleaks scans commit history, not just the worktree
+          persist-credentials: false
       # Upstream image, pinned by digest: a mutable tag could change what executes here with
       # the repository bind-mounted. Bump tag and digest together.
       - name: Run gitleaks over full history
@@ -49,10 +51,12 @@ jobs:
   policy:
     name: No unlisted addresses, no private material
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0          # authorship and diffs need history, not just the worktree
+          persist-credentials: false
       # New commits only: auditing all history would fail on pre-guard commits and tempt a rewrite
       # that unpublishes nothing. gitleaks above cannot replace this — it scans patch content only,
       # so commit messages and author/committer identity are invisible to it.

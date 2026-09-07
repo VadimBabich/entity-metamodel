@@ -61,7 +61,7 @@ correct side, and keep committed files free of references to the private side.
   not general advice.
 - `CLAUDE.local.md` (uncommitted) — where the private records live and what they decide.
 
-## Current state (2026-08-30)
+## Current state (2026-09-06)
 
 - The 1.x JavaParser Mojo was retired and **removed from the repository on 2026-08-30** under an
   approving decision record named in that commit's message. It survives in git history and in the
@@ -73,10 +73,18 @@ correct side, and keep committed files free of references to the private side.
   PostgreSQL in its integration suite.
 - **Most v2 decisions are now settled; a few are still open.** Where a decision record has been
   ratified it outranks the design paper, and contradicting it requires new evidence rather than
-  preference. Still open — do not pre-apply: `pom.xml` enforces Maven `[3.9,)` while a pending
-  decision proposes lowering it to 3.6.3, so leave the POM alone until that is resolved.
-- The API is not frozen yet: compatibility gating is the next station, so public signatures in the
-  v2 modules can still change.
+  preference. The once-open Maven-floor question is closed (2026-09-06): the proposal to lower the
+  floor was superseded — its scope was the removed 1.x line — so the enforcer's `[3.9,)` build
+  floor stays and must not be lowered.
+- **The API froze on 2026-09-06.** Public signatures in `core`, `runtime` and `runtime-r2dbc` are
+  gated: Revapi runs inside `verify` in those three modules (against an empty baseline until the
+  first publication, after which it arms against the released version — never flip the
+  unresolved-artifact switches to true before that), and the two runtime modules'
+  `ArchitectureRulesTest` pin the exact foreign types a public signature may carry (core admits
+  none — its Revapi raise alone is the pin). An intentional break needs a
+  justified `revapi.differences` entry in the module's POM — that ledger is the deprecation
+  record — and a new overload needs a by-hand check that no previously legal call becomes
+  ambiguous, which no tool supplies.
 - Publication is gated: nothing in the family has been released, and the release workflow
   refuses by design (see below).
 
