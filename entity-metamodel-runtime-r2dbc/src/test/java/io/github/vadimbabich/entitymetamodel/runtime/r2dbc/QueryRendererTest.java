@@ -1,6 +1,7 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ACCOUNT;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.SPONSOR;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.accountId;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ownerEmail;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -145,10 +146,8 @@ class QueryRendererTest {
 
   @Test
   void aSecondInstanceOfTheSameTableRendersUnderItsOwnAlias() {
-    EntityRef<Account> sponsor = ACCOUNT.as("sponsor");
-
     RenderedStatement statement =
-        renderer.render(FluentSelect.from(sponsor).where(accountId().of(sponsor).is(7L)));
+        renderer.render(FluentSelect.from(SPONSOR).where(accountId().of(SPONSOR).is(7L)));
 
     assertThat(statement.sql())
         .isEqualTo(
@@ -322,7 +321,6 @@ class QueryRendererTest {
 
   @NullMarked
   private static final class SchemaPrefixingNames implements NamingStrategy {
-
     @Override
     public String getTableName(Class<?> type) {
       return "app_schema." + type.getSimpleName().toLowerCase(Locale.ROOT);
@@ -331,7 +329,6 @@ class QueryRendererTest {
 
   @NullMarked
   private static final class MixedCaseSchemaPrefixingNames implements NamingStrategy {
-
     @Override
     public String getTableName(Class<?> type) {
       return "App_Schema." + type.getSimpleName();
@@ -340,7 +337,6 @@ class QueryRendererTest {
 
   @NullMarked
   private static final class DefaultSchemaNames implements NamingStrategy {
-
     @Override
     public String getSchema() {
       return "tenant_a";

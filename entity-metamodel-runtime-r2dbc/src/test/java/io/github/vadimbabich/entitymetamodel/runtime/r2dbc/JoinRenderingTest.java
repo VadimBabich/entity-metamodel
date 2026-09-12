@@ -2,6 +2,7 @@ package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ACCOUNT;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.MEMBERSHIP;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.SPONSOR;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.memberships;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.owningAccount;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.sponsoringAccount;
@@ -53,11 +54,9 @@ class JoinRenderingTest {
 
   @Test
   void oneRelationshipTraversedTwiceRendersTwoAliasedTables() {
-    EntityRef<Account> sponsor = ACCOUNT.as("sponsor");
-
     RenderedStatement statement =
         renderer.render(
-            FluentSelect.from(MEMBERSHIP).join(owningAccount()).join(sponsoringAccount(), sponsor));
+            FluentSelect.from(MEMBERSHIP).join(owningAccount()).join(sponsoringAccount(), SPONSOR));
 
     assertThat(statement.sql())
         .contains(
@@ -108,7 +107,6 @@ class JoinRenderingTest {
 
   @Test
   void aStatedConditionMayBeAnExpressionTheTypedVocabularyCannotSay() {
-    EntityRef<Account> sponsor = ACCOUNT.as("sponsor");
     PropertyRef<Membership, Long> accountId = MEMBERSHIP.property("accountId", Long.class);
     PropertyRef<Membership, Long> sponsorAccountId =
         MEMBERSHIP.property("sponsorAccountId", Long.class);
@@ -116,10 +114,10 @@ class JoinRenderingTest {
     Condition eitherAccount =
         SqlExpr.raw(
             "COALESCE({0}, {1}) = {2}", sponsorAccountId, accountId,
-            ACCOUNT.property("id", Long.class).of(sponsor));
+            ACCOUNT.property("id", Long.class).of(SPONSOR));
 
     RenderedStatement statement =
-        renderer.render(FluentSelect.from(MEMBERSHIP).leftOuterJoin(sponsor).on(eitherAccount));
+        renderer.render(FluentSelect.from(MEMBERSHIP).leftOuterJoin(SPONSOR).on(eitherAccount));
 
     assertThat(statement.sql())
         .contains(
@@ -192,14 +190,13 @@ class JoinRenderingTest {
   void aCrossTypeRelationshipAnchorsToTheInstanceItNamesEvenWithASecondSourcePresent() {
     // This relationship targets a Membership, so the declared anchor is the contract: refusing
     // because a second Account instance is present would break a shape that renders correctly.
-    EntityRef<Account> sponsor = ACCOUNT.as("sponsor");
     PropertyRef<Account, Long> accountId = ACCOUNT.property("id", Long.class);
 
     RenderedStatement statement =
         renderer.render(
             FluentSelect.from(ACCOUNT)
-                .join(sponsor)
-                .on(accountId.eq(accountId.of(sponsor)))
+                .join(SPONSOR)
+                .on(accountId.eq(accountId.of(SPONSOR)))
                 .join(memberships()));
 
     assertThat(statement.sql())
@@ -239,13 +236,12 @@ class JoinRenderingTest {
   void anAbsentDeclaredSourceSaysWhatToDoAcrossTypesToo() {
     // Hop 1 lands on a named Membership, so hop 2's declared source is not in the statement — the
     // same failure as the self-referencing case, and it deserves the same answer.
-    EntityRef<Account> sponsor = ACCOUNT.as("sponsor");
 
     FluentSelect<Account> throughANamedMembership =
         FluentSelect.from(ACCOUNT).join(memberships(), MEMBERSHIP.as("m2"));
 
     assertThatExceptionOfType(IllegalArgumentException.class)
-        .isThrownBy(() -> throughANamedMembership.join(sponsoringAccount(), sponsor))
+        .isThrownBy(() -> throughANamedMembership.join(sponsoringAccount(), SPONSOR))
         .withMessageContaining("does not carry");
   }
 
@@ -309,11 +305,9 @@ class JoinRenderingTest {
 
   @Test
   void joinsRenderInTheOrderTheyWereAdded() {
-    EntityRef<Account> sponsor = ACCOUNT.as("sponsor");
-
     RenderedStatement statement =
         renderer.render(
-            FluentSelect.from(MEMBERSHIP).join(sponsoringAccount(), sponsor).join(owningAccount()));
+            FluentSelect.from(MEMBERSHIP).join(sponsoringAccount(), SPONSOR).join(owningAccount()));
 
     assertThat(statement.sql())
         .containsSubsequence(
