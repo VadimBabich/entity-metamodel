@@ -2,13 +2,12 @@ package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ACCOUNT;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.MEMBERSHIP;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.SPONSOR;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.owningAccount;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.sponsoringAccount;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
-import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
-import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -40,15 +39,13 @@ class MultiEntityProjectionTest {
 
   @Test
   void twoInstancesOfOneTableProjectDistinctLabels() {
-    EntityRef<Account> sponsor = ACCOUNT.as("sponsor");
-
     RenderedStatement statement =
         renderer.render(
             FluentSelect.from(MEMBERSHIP)
                 .join(owningAccount())
-                .join(sponsoringAccount(), sponsor)
+                .join(sponsoringAccount(), SPONSOR)
                 .alsoSelect(ACCOUNT)
-                .alsoSelect(sponsor));
+                .alsoSelect(SPONSOR));
 
     assertThat(statement.sql())
         .contains("\"account\".\"account_id\" AS \"account__account_id\"")

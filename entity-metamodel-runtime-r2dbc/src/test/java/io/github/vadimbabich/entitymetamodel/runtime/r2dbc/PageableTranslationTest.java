@@ -1,12 +1,12 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ACCOUNT;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.MEMBERSHIP;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.SPONSOR;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.sponsoringAccount;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
-import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Account;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.Membership;
 import org.junit.jupiter.api.Test;
@@ -21,8 +21,6 @@ import org.springframework.data.r2dbc.mapping.R2dbcMappingContext;
  * returns rows in an order the caller did not ask for, with no error anywhere.
  */
 class PageableTranslationTest {
-
-  private static final EntityRef<Account> ACCOUNT = EntityRef.of(Account.class);
 
   private final R2dbcMappingContext mappingContext = new R2dbcMappingContext();
   private final QueryRenderer renderer =
