@@ -6,6 +6,10 @@ import io.github.vadimbabich.entitymetamodel.core.WildcardArgument;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import javax.lang.model.element.Element;
+import javax.lang.model.element.Modifier;
+import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
@@ -46,10 +50,42 @@ final class DeclaredTypes {
       return readabilityOfWildcard((WildcardType) mirror);
     }
     if (mirror.getKind() == TypeKind.DECLARED) {
-      return readabilityOfArguments((DeclaredType) mirror);
+      DeclaredType declaredType = (DeclaredType) mirror;
+
+      if (hasParameterizedEnclosingType(declaredType)) {
+        return Readability.NOT_EXPRESSIBLE;
+      }
+
+      return readabilityOfArguments(declaredType);
     }
 
     return Readability.READABLE;
+  }
+
+  static boolean isAccessibleFrom(TypeMirror mirror, PackageElement viewpoint) {
+    if (mirror.getKind() == TypeKind.ARRAY) {
+      return isAccessibleFrom(((ArrayType) mirror).getComponentType(), viewpoint);
+    }
+    if (mirror.getKind() == TypeKind.WILDCARD) {
+      return isWildcardAccessibleFrom((WildcardType) mirror, viewpoint);
+    }
+    if (mirror.getKind() != TypeKind.DECLARED) {
+      return true;
+    }
+
+    DeclaredType declaredType = (DeclaredType) mirror;
+
+    if (!isElementAccessibleFrom(declaredType.asElement(), viewpoint)) {
+      return false;
+    }
+
+    for (TypeMirror argument : declaredType.getTypeArguments()) {
+      if (!isAccessibleFrom(argument, viewpoint)) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   static TypeRef typeRefOf(TypeMirror mirror) {
@@ -123,5 +159,61 @@ final class DeclaredTypes {
     }
 
     return Readability.READABLE;
+  }
+
+  private static boolean hasParameterizedEnclosingType(DeclaredType declaredType) {
+    TypeMirror enclosing = declaredType.getEnclosingType();
+
+    while (enclosing.getKind() == TypeKind.DECLARED) {
+      DeclaredType enclosingType = (DeclaredType) enclosing;
+
+      if (!enclosingType.getTypeArguments().isEmpty()) {
+        return true;
+      }
+
+      enclosing = enclosingType.getEnclosingType();
+    }
+
+    return false;
+  }
+
+  private static boolean isWildcardAccessibleFrom(WildcardType wildcard, PackageElement viewpoint) {
+    if (wildcard.getExtendsBound() != null) {
+      return isAccessibleFrom(wildcard.getExtendsBound(), viewpoint);
+    }
+    if (wildcard.getSuperBound() != null) {
+      return isAccessibleFrom(wildcard.getSuperBound(), viewpoint);
+    }
+
+    return true;
+  }
+
+  private static boolean isElementAccessibleFrom(Element element, PackageElement viewpoint) {
+    Element current = element;
+
+    while (current instanceof TypeElement type) {
+      Set<Modifier> modifiers = type.getModifiers();
+
+      if (modifiers.contains(Modifier.PRIVATE)) {
+        return false;
+      }
+      if (!modifiers.contains(Modifier.PUBLIC) && !isDeclaredIn(type, viewpoint)) {
+        return false;
+      }
+
+      current = type.getEnclosingElement();
+    }
+
+    return true;
+  }
+
+  private static boolean isDeclaredIn(TypeElement type, PackageElement candidate) {
+    Element enclosing = type.getEnclosingElement();
+
+    while (!(enclosing instanceof PackageElement declaringPackage)) {
+      enclosing = enclosing.getEnclosingElement();
+    }
+
+    return declaringPackage.getQualifiedName().contentEquals(candidate.getQualifiedName());
   }
 }

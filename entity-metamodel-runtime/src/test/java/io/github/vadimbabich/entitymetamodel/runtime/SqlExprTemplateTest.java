@@ -2,6 +2,7 @@ package io.github.vadimbabich.entitymetamodel.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import io.github.vadimbabich.entitymetamodel.runtime.fixtures.Account;
 import org.junit.jupiter.api.Test;
@@ -39,6 +40,24 @@ class SqlExprTemplateTest {
     SqlExpr padded = SqlExpr.raw("first = {00} AND second = {01}", "first", "second");
 
     assertThat(padded.arguments()).containsExactly("first", "second");
+  }
+
+  @Test
+  void aNullArgumentIsRefusedNamingTheFragmentLevelAlternative() {
+    assertThatNullPointerException()
+        .isThrownBy(() -> SqlExpr.raw("owner_email = {0}", (Object) null))
+        .withMessageContaining("argument 0")
+        .withMessageContaining("IS NULL");
+  }
+
+  @Test
+  void anArrayArgumentIsCopiedSoALaterMutationDoesNotReachTheBinding() {
+    String[] keys = {"archived"};
+
+    SqlExpr fragment = SqlExpr.raw("attributes ?| {0}", (Object) keys);
+    keys[0] = "draft";
+
+    assertThat((String[]) fragment.arguments().get(0)).containsExactly("archived");
   }
 
   @Test

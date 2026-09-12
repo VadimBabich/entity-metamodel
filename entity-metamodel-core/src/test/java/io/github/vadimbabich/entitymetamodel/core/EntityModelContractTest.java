@@ -2,6 +2,7 @@ package io.github.vadimbabich.entitymetamodel.core;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -25,6 +26,25 @@ class EntityModelContractTest {
     assertThat(model.entities())
         .extracting(EntityDescriptor::qualifiedName)
         .containsExactly("com.example.Apple", "com.example.Mango", "com.example.Zebra");
+  }
+
+  @Test
+  void aNullComponentIsRefusedByNameInsteadOfFailingWhereItIsFirstRead() {
+    assertThatNullPointerException()
+        .isThrownBy(() -> EntityDescriptor.builder("com.example", "com.example.Ghost", null).build())
+        .withMessage("kind");
+    assertThatNullPointerException()
+        .isThrownBy(() -> EntityDescriptor
+            .builder("com.example", "com.example.Ghost", TypeKind.CLASS)
+            .tableName(null)
+            .build())
+        .withMessage("tableName");
+    assertThatNullPointerException()
+        .isThrownBy(() -> AttributeDescriptor.of("id", null, true, List.of()))
+        .withMessage("declaredType");
+    assertThatNullPointerException()
+        .isThrownBy(() -> new WildcardArgument(null, List.of(TypeRef.of("java.lang.String"))))
+        .withMessage("bound");
   }
 
   @Test
@@ -74,7 +94,6 @@ class EntityModelContractTest {
             .superType(base)
             .build();
 
-    // Contributions stay attributed to their declaring type.
     assertThat(legacyDocument.attributes()).extracting(AttributeDescriptor::name)
         .containsExactly("id");
     assertThat(legacyDocument.superTypes()).hasSize(1);

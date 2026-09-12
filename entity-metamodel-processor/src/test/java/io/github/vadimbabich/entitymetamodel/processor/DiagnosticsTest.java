@@ -356,6 +356,105 @@ class DiagnosticsTest {
         .contains("PAYLOAD");
   }
 
+  @Test
+  void aMemberTypeTheGeneratedClassCannotAccessIsReportedRatherThanBreakingTheBuild() {
+    CompilationOutcome outcome = compile("PrivateNestedType.java");
+
+    assertThat(outcome.errors()).isEmpty();
+    assertThat(outcome.succeeded()).isTrue();
+    assertThat(outcome.notes()).anyMatch(note -> note.contains("EM-N6")
+        && note.contains("status")
+        && note.contains("access"));
+    assertThat(generatedSource(outcome, "PrivateNestedType__"))
+        .contains("ID")
+        .doesNotContain("STATUS")
+        .doesNotContain("PrivateNestedType.Status");
+  }
+
+  @Test
+  void anUnannotatedSubclassOfAnEntityIsAnEntityWhereverItIsReferenced() {
+    CompilationOutcome outcome = compile(
+        "InheritedTableRefHolder.java", "InheritedTableSubclass.java", "InheritedTableBase.java");
+
+    assertThat(outcome.succeeded()).isTrue();
+    assertThat(outcome.notes()).anyMatch(note -> note.contains("EM-N3")
+        && note.contains("sole"));
+    assertThat(outcome.notes()).anyMatch(note -> note.contains("EM-N3")
+        && note.contains("many"));
+    assertThat(generatedSource(outcome, "InheritedTableRefHolder__"))
+        .contains("LABEL")
+        .doesNotContain("SOLE")
+        .doesNotContain("MANY");
+    assertThat(outcome.generatedSources())
+        .containsKey(Fixtures.generatedPathOf("InheritedTableSubclass__"));
+  }
+
+  @Test
+  void anInheritedMemberHiddenByAnExcludedNearerDeclarationIsNotEmittedInItsPlace() {
+    CompilationOutcome outcome =
+        compile("HidingLeaf.java", "HiddenBase.java", "ChildAggregate.java");
+
+    assertThat(outcome.succeeded()).isTrue();
+    assertThat(outcome.notes()).anyMatch(note -> note.contains("EM-N3")
+        && note.contains("items"));
+    assertThat(generatedSource(outcome, "HidingLeaf__"))
+        .contains("ID")
+        .doesNotContain("ITEMS");
+  }
+
+  @Test
+  void anEntityInTheDefaultPackageReferencesItsNestedTypeWithoutAnImport() {
+    CompilationOutcome outcome = new FixtureCompiler(workDirectory).compile(
+        Fixtures.sources("diagnostics/DefaultPackaged.java"), new EntityMetamodelProcessor());
+
+    assertThat(outcome.errors()).isEmpty();
+    assertThat(outcome.succeeded()).isTrue();
+    assertThat(outcome.generatedText("DefaultPackaged__.java"))
+        .doesNotContain("import DefaultPackaged")
+        .contains("PropertyRef<DefaultPackaged, DefaultPackaged.Kind> KIND");
+  }
+
+  @Test
+  void anAnnotationTypeOrInterfaceCarryingTableGetsNoMetamodel() {
+    CompilationOutcome outcome =
+        compile("Aggregate.java", "TableInterface.java", "ComposedChild.java");
+
+    assertThat(outcome.succeeded()).isTrue();
+    assertThat(outcome.generatedSources()).isEmpty();
+  }
+
+  @Test
+  void anEntityNestedInAnAnnotatedInterfaceIsItsOwnRootRatherThanPromotingTheInterface() {
+    CompilationOutcome outcome = compile("TableInterfaceOwner.java");
+
+    assertThat(outcome.succeeded()).isTrue();
+    assertThat(outcome.generatedSources().keySet())
+        .containsExactly(Fixtures.generatedPathOf("TableInterfaceOwner_Owned__"));
+  }
+
+  @Test
+  void anInnerClassOfAParameterizedOuterIsReportedRatherThanEmittedRaw() {
+    CompilationOutcome outcome = compileWithOptions(
+        List.of("InnerOfGenericHolder.java", "GenericOuter.java"), "-Xlint:rawtypes");
+
+    assertThat(outcome.succeeded()).isTrue();
+    assertThat(outcome.warnings()).isEmpty();
+    assertThat(outcome.notes()).anyMatch(note -> note.contains("EM-N6")
+        && note.contains("inner"));
+    assertThat(generatedSource(outcome, "InnerOfGenericHolder__"))
+        .contains("ID")
+        .doesNotContain("INNER");
+  }
+
+  @Test
+  void anEntityNameEndingWithAnUnderscoreIsRejectedAtCompileTime() {
+    CompilationOutcome outcome = compile("Trailing_.java");
+
+    assertThat(outcome.errors()).anyMatch(error -> error.contains("EM-E8")
+        && error.contains("Trailing_"));
+    assertThat(outcome.generatedSources()).isEmpty();
+  }
+
   /** Stands in for any other processor in the build: contributes a type only in the first round. */
   @SupportedAnnotationTypes(MappingAnnotations.TABLE)
   private static final class GeneratesLaterProcessor extends AbstractProcessor {

@@ -2,6 +2,7 @@ package io.github.vadimbabich.entitymetamodel.core;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * A declared annotation carried as source-level literals. Effective SQL names resolve at runtime;
@@ -11,6 +12,7 @@ public record AnnotationFact(String qualifiedName, Map<String, String> declaredV
 
   public AnnotationFact {
     TypeRef.requireText(qualifiedName, "qualifiedName");
+    Objects.requireNonNull(declaredValues, "declaredValues");
     declaredValues = Map.copyOf(declaredValues);
   }
 

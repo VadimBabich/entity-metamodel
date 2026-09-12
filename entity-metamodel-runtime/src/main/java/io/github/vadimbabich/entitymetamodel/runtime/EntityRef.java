@@ -18,6 +18,8 @@ public final class EntityRef<E> {
    */
   public static final String PROJECTION_SEPARATOR = "__";
 
+  private static final String ALIAS_JOINER = "_";
+
   // The alias renders as a bare identifier, so this is the one place caller text reaches the
   // statement unmediated: property and table names both resolve through the mapping context.
   private static final Pattern IDENTIFIER_SAFE = Pattern.compile("[A-Za-z0-9_]+");
@@ -30,14 +32,12 @@ public final class EntityRef<E> {
     this.alias = alias;
   }
 
-  /**
-   * The default instance, aliased with the lower-cased entity simple name.
-   */
+  /** The default instance, aliased with the lower-cased entity simple name. */
   public static <E> EntityRef<E> of(Class<E> entityType) {
     Objects.requireNonNull(entityType, "entityType");
 
     String defaultAlias = defaultAliasOf(entityType);
-    rejectReservedSeparator(defaultAlias, "entity simple name");
+    rejectUnusableAlias(defaultAlias, "entity simple name");
 
     return new EntityRef<>(entityType, defaultAlias);
   }
@@ -60,8 +60,8 @@ public final class EntityRef<E> {
               + " digits or underscore, but was '" + qualifier + "'");
     }
 
-    String qualifiedAlias = alias + "_" + qualifier.toLowerCase(Locale.ROOT);
-    rejectReservedSeparator(qualifiedAlias, "alias");
+    String qualifiedAlias = alias + ALIAS_JOINER + qualifier.toLowerCase(Locale.ROOT);
+    rejectUnusableAlias(qualifiedAlias, "alias");
 
     return new EntityRef<>(entityType, qualifiedAlias);
   }
@@ -117,11 +117,17 @@ public final class EntityRef<E> {
     return entityType.getSimpleName().toLowerCase(Locale.ROOT);
   }
 
-  private static void rejectReservedSeparator(String candidate, String what) {
+  private static void rejectUnusableAlias(String candidate, String what) {
     if (candidate.contains(PROJECTION_SEPARATOR)) {
       throw new IllegalArgumentException(
           "The " + what + " '" + candidate + "' contains the reserved separator '"
               + PROJECTION_SEPARATOR + "'");
+    }
+    if (candidate.endsWith(ALIAS_JOINER)) {
+      throw new IllegalArgumentException(
+          "The " + what + " '" + candidate + "' ends with an underscore, so its projected labels"
+              + " would begin with the label prefix of an instance aliased '"
+              + candidate.substring(0, candidate.length() - ALIAS_JOINER.length()) + "'");
     }
   }
 }
