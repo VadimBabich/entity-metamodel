@@ -2,6 +2,7 @@ package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
 
 /**
  * A rendered statement, the bindings its markers expect in allocation order, and the alias each
@@ -24,9 +25,7 @@ public record RenderedStatement(
     bindings = List.copyOf(bindings);
   }
 
-  /**
-   * The expected values in marker order, as a positional binder consumes them.
-   */
+  /** The expected values in marker order, as a positional binder consumes them. */
   public List<Object> values() {
     return bindings.stream().map(Binding::value).toList();
   }
@@ -36,35 +35,25 @@ public record RenderedStatement(
    * turn every filtered query into a record of whatever it filtered on.
    */
   public String preview() {
-    StringBuilder description = new StringBuilder(sql);
-
-    for (Binding binding : bindings) {
-      appendMarker(description, binding.marker(), REDACTED);
-    }
-
-    return description.toString();
+    return previewWith(binding -> REDACTED);
   }
 
-  /**
-   * The same, showing the values, for somewhere their disclosure is already acceptable.
-   */
+  /** The same, showing the values, for somewhere their disclosure is already acceptable. */
   public String previewWithValues() {
+    return previewWith(binding -> String.valueOf(binding.value()));
+  }
+
+  private String previewWith(Function<Binding, String> shownValue) {
     StringBuilder description = new StringBuilder(sql);
 
     for (Binding binding : bindings) {
-      appendMarker(description, binding.marker(), String.valueOf(binding.value()));
+      description.append(System.lineSeparator())
+          .append("  ")
+          .append(binding.marker())
+          .append(" = ")
+          .append(shownValue.apply(binding));
     }
 
     return description.toString();
-  }
-
-  private static void appendMarker(
-      StringBuilder description, String marker, String shownValue) {
-
-    description.append(System.lineSeparator())
-        .append("  ")
-        .append(marker)
-        .append(" = ")
-        .append(shownValue);
   }
 }
