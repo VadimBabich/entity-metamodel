@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+#
+# The message is the one thing pre-commit cannot see, so a trailer carrying an address that is not
+# on the allowlist is refused here, before the commit exists rather than after the push.
+
+set -euo pipefail
+
+repository_root="$(git rev-parse --show-toplevel)"
+readonly repository_root
+
+"${repository_root}/.github/scripts/check-emails.sh" message "$1"

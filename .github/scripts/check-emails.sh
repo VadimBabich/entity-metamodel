@@ -6,6 +6,7 @@
 #
 # Usage:
 #   check-emails.sh staged             # pre-commit hook
+#   check-emails.sh message <file>     # commit-msg hook
 #   check-emails.sh range <git-range>  # Guards workflow
 
 # No -E: it propagates the ERR trap into $( ), where the trap's exit overwrites the real
@@ -32,7 +33,7 @@ timestamp() {
 trap 'log_error "unexpected failure at line ${LINENO}"; exit 1' ERR
 
 usage() {
-  log_error "usage: check-emails.sh staged | range <git-range>"
+  log_error "usage: check-emails.sh staged | message <file> | range <git-range>"
 }
 
 resolve_allowlist_path() {
@@ -147,18 +148,45 @@ scan_addresses() {
   done <<< "${address_list}"
 }
 
+# The identities the commit will actually carry: `git var` resolves --author, the GIT_*_EMAIL
+# overrides and user.email alike, where reading the config sees only the last of those.
+check_commit_identities() {
+  local author_ident
+  local committer_ident
+
+  if ! author_ident="$(git var GIT_AUTHOR_IDENT)"; then
+    log_error "resolving the author identity failed — set user.email before committing"
+    return 1
+  fi
+
+  if ! committer_ident="$(git var GIT_COMMITTER_IDENT)"; then
+    log_error "resolving the committer identity failed — set user.email before committing"
+    return 1
+  fi
+
+  scan_identity "author identity" "${author_ident}"
+  scan_identity "committer identity" "${committer_ident}"
+}
+
+scan_identity() {
+  local source_label="$1"
+  local ident="$2"
+  local address
+
+  address="${ident#*<}"
+  address="${address%%>*}"
+
+  if ! is_allowed_address "${address}"; then
+    record_violation "${source_label}: ${address}"
+  fi
+}
+
 check_staged() {
-  local configured_identity
   local diff_text
   local added_lines
 
-  # git config exits 1 when the key is unset; the empty case is handled below.
-  configured_identity="$(git config user.email || true)"
-
-  if [[ -z "${configured_identity}" ]]; then
-    record_violation "git config user.email is unset — set it before committing"
-  elif ! is_allowed_address "${configured_identity}"; then
-    record_violation "git config user.email: ${configured_identity}"
+  if ! check_commit_identities; then
+    return 1
   fi
 
   if ! diff_text="$(git diff --cached -U0)"; then
@@ -177,6 +205,28 @@ check_staged() {
   fi
 
   scan_addresses "staged content" "${content_addresses}"
+}
+
+check_message() {
+  local message_path="$1"
+  local message_text
+  local message_addresses
+
+  if [[ ! -f "${message_path}" ]]; then
+    log_error "commit message file '${message_path}' does not exist"
+    return 1
+  fi
+
+  if ! message_text="$(cat "${message_path}")"; then
+    log_error "reading the commit message from '${message_path}' failed"
+    return 1
+  fi
+
+  if ! message_addresses="$(extract_addresses "${message_text}")"; then
+    return 1
+  fi
+
+  scan_addresses "commit message" "${message_addresses}"
 }
 
 check_range() {
@@ -210,8 +260,10 @@ check_range() {
     return 1
   fi
 
-  if ! diff_text="$(git diff "${range}" -U0)"; then
-    log_error "reading the diff for '${range}' failed"
+  # Per commit, not the range's net diff: content added and removed within one push has an empty
+  # net diff and is in public history all the same.
+  if ! diff_text="$(git log -p -U0 --format='' --diff-merges=first-parent "${range}")"; then
+    log_error "reading the per-commit diffs for '${range}' failed"
     return 1
   fi
 
@@ -257,7 +309,7 @@ report_violations() {
 
 main() {
   local mode="${1:-}"
-  local range="${2:-}"
+  local target="${2:-}"
 
   if ! ALLOWLIST_PATH="$(resolve_allowlist_path)"; then
     exit 1
@@ -275,13 +327,23 @@ main() {
         exit 1
       fi
       ;;
+    message)
+      if [[ -z "${target}" ]]; then
+        log_error "mode 'message' needs the path of the commit message file"
+        exit 1
+      fi
+
+      if ! check_message "${target}"; then
+        exit 1
+      fi
+      ;;
     range)
-      if [[ -z "${range}" ]]; then
+      if [[ -z "${target}" ]]; then
         log_error "mode 'range' needs a git range"
         exit 1
       fi
 
-      if ! check_range "${range}"; then
+      if ! check_range "${target}"; then
         exit 1
       fi
       ;;

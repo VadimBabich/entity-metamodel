@@ -73,7 +73,7 @@ if [ -n "${force_added}" ]; then
   blockers+=("Ignored files are staged, which only a forced add can do: $(printf '%s' "${force_added}" | tr '\n' ' ')")
 fi
 
-staged_shell="$(staged_matching '\.(sh|bash)$')"
+staged_shell="$(staged_matching '(\.(sh|bash)$|^\.githooks/)')"
 if [ -n "${staged_shell}" ]; then
   if ! command -v shellcheck >/dev/null 2>&1; then
     notes+=("shellcheck is not installed, so staged shell scripts were not linted.")
