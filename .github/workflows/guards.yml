@@ -14,12 +14,9 @@ on:
 permissions:
   contents: read
 
-# Same key as maven.yml — see its comment. Safe for a guard: whichever run survives examines the
-# same commits, and a cancelled required check blocks rather than passes. Master is never
-# cancelled, so a guard always completes on the release line.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+# No concurrency group, unlike maven.yml: a push run scans only its own before..HEAD range, so a run
+# cancelled or superseded by the next push leaves that push's commits scanned by no completed run.
+# These jobs take seconds; a duplicate run costs less than a false green.
 
 # GitHub's implicit shell is `bash -e`, with no pipefail. Every guard here reads git through
 # pipelines, so that default would let a failing stage pass as success.
@@ -68,19 +65,27 @@ jobs:
           scan_range="$(./.github/scripts/resolve-scan-range.sh)"
 
           echo "scanning ${scan_range}"
+          echo "SCAN_RANGE=${scan_range}" >> "${GITHUB_ENV}"
 
           ./.github/scripts/check-emails.sh range "${scan_range}"
 
       # The risk is licensed third-party source, not only credentials. .gitignore is the
-      # primary guard; this is the backstop if an ignore is ever weakened.
-      - name: Fail if private material is tracked
+      # primary guard; this is the backstop if an ignore is ever weakened or forced past.
+      - name: Fail if private material is tracked or was committed
+        run: ./.github/scripts/check-private-paths.sh "${SCAN_RANGE}"
+
+  shell:
+    name: Guard scripts pass shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The runner image's shellcheck rather than a pinned third-party action; the version is
+      # printed so a new finding can be traced to an image upgrade.
+      - name: Lint the scripts and hooks
         run: |
-          tracked_files="$(git ls-files)"
+          shellcheck --version
 
-          if tracked_private_paths="$(printf '%s\n' "${tracked_files}" | grep -E '^(_doc/|docs/(repo_usage|repository)/)')"; then
-            echo "::error::Private material is tracked in git:"
-            echo "${tracked_private_paths}"
-            exit 1
-          fi
-
-          echo "clean — no private paths tracked"
+          shellcheck -S style .github/scripts/*.sh .githooks/*
