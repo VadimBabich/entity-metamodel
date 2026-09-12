@@ -1,59 +1,102 @@
 # entity-metamodel
 
-Generate a metamodel from your Spring Data entities while they compile, then build R2DBC
-queries — joins included — that the compiler checks.
+Compile-time metamodels for Spring Data R2DBC entities, and typed queries — joins included — that
+the compiler checks against them.
 
-> **Nothing is on Maven Central yet.** There is no artifact there to depend on: you build it from
-> source. Everything below runs today and is held by tests on every build, and the public API froze
-> on 2026-09-06 — though the compatibility promise only starts with the first published version.
-> [Where it's going](#where-its-going) has the bar for that release.
+> **Not on Maven Central yet.** You build it from source. Everything below runs today and is held
+> by tests on every build; the public API froze on 2026-09-06, and the compatibility promise
+> starts with the first published version. [Where it's going](#where-its-going) has the bar for
+> that release.
 
-## The problem
+## Why this exists
 
-Spring Data R2DBC takes property and column names as strings:
+Spring Data R2DBC takes property names as strings:
 
 ```text
 Criteria.where("ownerEmail").is(email);
 ```
 
-The compiler cannot see that string. Rename the field, change the `@Column`, delete the property —
-the build stays green and you find out from a failing query at runtime, usually on the path nobody
-exercised locally. Grep is the only refactoring tool that works, and it misses the name that was
-assembled by concatenation.
+The compiler cannot see that string. Rename the field, change the `@Column`, delete the property:
+the build stays green and the query fails at runtime, usually on the path nobody exercised locally.
+Grep is the only refactoring tool that works, and it misses the name that was concatenated.
 
-The second cost is joins. Spring's SQL DSL can express them, but the fluent `Query`/`Criteria` API
-has no join vocabulary, so every repository touching two tables hand-assembles the same ceremony:
-aliased table handles, comparisons built from string lookups, bind markers threaded through `ON`
-clauses, per-entity column lists, manual row de-multiplexing. Codebases grow an in-house layer whose
-whole job is carrying that state around.
+Joins cost more. Spring's SQL DSL can express them, but the fluent `Query`/`Criteria` API has no
+join vocabulary, so every repository touching two tables hand-assembles the same ceremony: aliased
+table handles, comparisons built from string lookups, bind markers threaded through `ON` clauses,
+per-entity column lists, rows de-multiplexed by hand. Codebases grow an in-house layer whose only
+job is carrying that state around.
 
-Both have one fix: derive the references from the entities during the build, and give joins a
-vocabulary that carries types. A rename then breaks compilation, which is where you want to hear
-about it.
+Both problems have one fix: derive the references from the entities while they compile, and give
+joins a vocabulary that carries types. A rename then breaks the build, which is where you want to
+hear about it.
 
 ## What it does differently
 
-Hand-written constant classes solve the first half and rot quietly — nothing keeps them in step with
-the entity. Runtime introspection stays in step but moves the error back to runtime, which is the
-problem you started with.
-
-This participates in compilation instead:
+Hand-written constant classes fix the first half and rot quietly, because nothing keeps them in step
+with the entity. Runtime introspection stays in step but moves the error back to runtime, which is
+the problem you started with. This one participates in compilation instead.
 
 - **A wrong reference is a compile error.** `PropertyRef<Account, String>` carries the entity, the
-  property name *and* the value type, so comparing against the wrong type, or joining unrelated
-  columns, does not compile.
-- **Entity-first, one mapping context.** No SQL name is ever baked into generated code. Names
-  resolve at use through Spring's own `RelationalMappingContext`, so `@Column` and your
-  `NamingStrategy` stay the single source of truth for generation, rendering and row reading alike.
+  property name and the value type. Comparing against the wrong type, or joining unrelated columns,
+  does not compile.
+- **Entity-first, one mapping context.** No SQL name is baked into generated code. Names resolve at
+  use through Spring's own `RelationalMappingContext`, so `@Column` and your `NamingStrategy` stay
+  the single source of truth for generation, rendering and row reading alike.
 - **Ordinary code.** Generated files are plain `.java` on your compile path. Ctrl-click reaches the
   declaration, find-usages works, the debugger steps through them.
 - **Deterministic.** Regenerating over unchanged sources is byte-identical, and the output is pinned
-  by a committed corpus of expected files, so it cannot drift without a visible diff.
+  by a committed corpus of expected files, so the shape cannot drift without a visible diff.
+
+Every alternative solves a real problem. The question is whose, and what it couples you to.
+
+| | Hand-written constants | Spring Data alone | QueryDSL | jOOQ | entity-metamodel |
+|---|---|---|---|---|---|
+| Rename-safe references | no | no | yes | yes | **yes** |
+| Typed joins | n/a | no | yes (JDBC) | yes | **yes** |
+| Reactive R2DBC execution | n/a | yes | no first-party | yes | **yes** |
+| Metamodel derived from | you | — | entities | database schema | **your entities** |
+| Shares Spring Data's mapping context | yes | yes | no | no | **yes** |
+| Full SQL: aggregates, unions, windows, DML | — | no | yes | **yes** | no — deliberate |
+
+Two differences do most of the work. QueryDSL's SQL module executes over JDBC, so a reactive
+codebase gets no first-party executor. jOOQ is the strongest alternative and is schema-first: its
+metamodel comes from the database, so next to Spring Data your column names, converters and entity
+mapping live in two systems that nothing keeps consistent. If your queries need aggregation, set
+operations or window functions as a matter of course, jOOQ is the right tool, and the two coexist
+precisely because this one stops where full SQL begins.
 
 ## Five minutes
 
+The processor goes on the annotation-processor path and never reaches your runtime classpath. The
+runtime goes on the compile path, because generated code imports it. Nothing is on Maven Central, so
+[install both into your local repository first](#requirements-and-installation).
+
+```xml
+<dependency>
+  <groupId>io.github.vadimbabich</groupId>
+  <artifactId>entity-metamodel-runtime-r2dbc</artifactId>
+  <version>2.0.0-SNAPSHOT</version>
+</dependency>
+```
+
+```xml
+<plugin>
+  <groupId>org.apache.maven.plugins</groupId>
+  <artifactId>maven-compiler-plugin</artifactId>
+  <configuration>
+    <annotationProcessorPaths>
+      <path>
+        <groupId>io.github.vadimbabich</groupId>
+        <artifactId>entity-metamodel-processor</artifactId>
+        <version>2.0.0-SNAPSHOT</version>
+      </path>
+    </annotationProcessorPaths>
+  </configuration>
+</plugin>
+```
+
 An ordinary Spring Data entity. This one is from the committed corpus, so the metamodel below is
-the real output — trimmed only of its private constructor:
+the real output, trimmed only of its private constructor:
 
 ```java
 @Table("accounts")
@@ -89,7 +132,8 @@ public final class Account__ {
 deciding membership. `draftNote` is not, because `@Transient` wins over it. Members come out ordered
 by name, so the file never depends on the compiler that produced it.
 
-Now the query, joining `Membership` to the account that owns it:
+Now a query. `Membership` is the query suite's fixture, a table with an `accountId` column; its
+metamodel is the processor's output too. This joins each membership to the account that owns it:
 
 ```java
 JoinRef<Membership, Account> owner = JoinRef.of(Membership__.ACCOUNT_ID, Account__.ID);
@@ -104,9 +148,9 @@ Mono<Page<Membership>> page = executor.page(byOwner, PageRequest.of(0, 20));
 ```
 
 `JoinRef.of` compiles only because both sides are `Long`, and `is("…")` only because `OWNER_EMAIL`
-is a `String` property. `byOwner` is an immutable value that performs no I/O — describing it touches
-no database, and the same description serves both the page and its count. Rename `ownerEmail` and
-this file stops compiling.
+is a `String` property. `byOwner` is an immutable value that performs no I/O: describing it touches
+no database, and the same description serves the page and its count. Rename `ownerEmail` and this
+file stops compiling.
 
 The executor is the one thing you wire yourself. The library registers no component and holds no
 static state, so it never guesses which client, context or dialect you meant:
@@ -126,12 +170,12 @@ MetamodelQueryExecutor metamodelQueryExecutor(
 }
 ```
 
-Renderer and converter must share one mapping context: one names a column when projecting it and the
-other when reading it back, so two contexts produce rows nothing claims.
+Renderer and converter must share one mapping context. One names a column when projecting it and the
+other when reading it back, so two contexts produce rows that nothing claims.
 
-### Keeping your repositories
+### Where it goes in your code
 
-The executor is an ordinary bean, so it goes wherever your code already goes — including a Spring
+The executor is an ordinary bean, so it fits wherever your code already lives, including a Spring
 Data repository. Put it in the custom fragment and the rest of the interface is untouched: derived
 methods and `@Query` methods are a different mechanism and keep working.
 
@@ -162,51 +206,51 @@ class MembershipQueriesImpl implements MembershipQueries {
 }
 ```
 
-`ownerEmail` belongs to the joined table, so no derived method can express this one — which is what
+`ownerEmail` belongs to the joined table, so no derived method can express this one, which is what
 the fragment is for. `save` and `deleteById` still go through Spring's own machinery.
 
 ## Core ideas
 
 - **Compile-time, because the input is compilation.** Annotated Java in the same module is exactly
   the JSR-269 case. Participating in the compile buys resolved types, inheritance, incremental
-  builds and Maven + Gradle + IDE support from one artifact — no build-tool plugin to maintain.
+  builds and Maven, Gradle and IDE support from one artifact, with no build-tool plugin to maintain.
 - **A description is a value.** `FluentSelect` is immutable and performs no I/O; rendering it is a
   pure function. The library never schedules, times out, retries, caches or opens a transaction, and
-  no Spring SQL type appears in a public signature — those decisions stay yours. None of that is
-  prose alone: architecture tests ban the blocking, scheduling and rendering-type leaks, and every
-  build diffs the public API through Revapi.
+  no Spring SQL type appears in a public signature. Those decisions stay yours. Architecture tests
+  ban the blocking, scheduling and rendering-type leaks, and every build diffs the public API
+  through Revapi.
 - **A closed algebra.** The query surface was derived from measured usage in real codebases and
   stops where full SQL begins. It does not wrap your repositories, replace your converters or ask
   you to adopt a query language. That boundary is what keeps it small enough to be correct.
 
 ## What it supports
 
-**Generation** — `entity-metamodel-processor`, a JSR-269 processor with no third-party dependency:
+**Generation**, by `entity-metamodel-processor`, a JSR-269 processor with no third-party dependency:
 
-- `@Table` classes and records, following Spring's persistent-property rules.
+- `@Table` classes and records, following Spring's persistent-property rules;
   `-Aentitymetamodel.requireColumnAnnotation` opts into the stricter rule.
 - Inherited members flattened into the concrete entity and re-anchored there; nested `@Table` types
   mirrored as nested metamodels.
 - Exact declared types — generics, arrays, bounded wildcards — carried into the ref type arguments.
 - Output held byte-for-byte against the committed corpus on JDK 17, 21 and 25.
-- Registered *isolating*: editing one entity regenerates one metamodel. Measured end to end on
-  Gradle 9.4.1, including a rename of a private field on a mapped supertype.
+- Registered *isolating*, so an incremental build regenerates only the metamodels whose inputs
+  changed; the registration is held by a test and was measured end to end on Gradle.
 
-**Queries** — `entity-metamodel-runtime-r2dbc`, every item below exercised against a real PostgreSQL
-16 in the integration suite:
+**Queries**, by `entity-metamodel-runtime-r2dbc`, each item exercised against a real PostgreSQL 16
+in the integration suite:
 
 - Inner and left-outer joins, from a `JoinRef` or from an `ON` condition you state, binds included.
   One table can join several times under distinct instances, all hydrated from one row.
 - Typed filters — equality, ranges, `IN`, `LIKE`, null tests, column-to-column comparison,
   negation — composed with `and`/`or` and parenthesised by construction, so an `OR` cannot widen a
   match by re-associating.
-- Terminals `all`, `page`, `slice`, `list`, `one`, `first`, `count` and `exists`, every one of them
-  a cold publisher. Every row-returning terminal takes a mapper, and `all` also takes a `Pageable`
-  to stream one window as a `Flux`.
-- Count elision: a page counts only where the rows in hand cannot imply the total, and `slice` never
-  counts at all — it fetches one row past the page and reports a successor from whether it arrived.
-- `distinct()`, for the row multiplication a to-many join causes. The total and the paging probe keep
-  their meaning rather than being approximated.
+- Terminals `all`, `page`, `slice`, `list`, `one`, `first`, `count` and `exists`, every one a cold
+  publisher. Every row-returning terminal takes a mapper, and `all` also takes a `Pageable` to
+  stream one window as a `Flux`.
+- Count elision: a page counts only where the rows in hand cannot imply the total, and `slice`
+  never counts. It fetches one row past the page and reports a successor from whether it arrived.
+- `distinct()`, for the row multiplication a to-many join causes; the total and the paging probe
+  keep their meaning rather than being approximated.
 - `Pageable` translation, including a sort property that arrives as text from a web request.
 - A `Criteria` your application already builds, accepted unchanged through `CriteriaAdapter` with
   nested groups and SQL precedence intact, so adopting this is not a rewrite of your filter code. An
@@ -218,21 +262,22 @@ the fragment is for. `save` and `deleteById` still go through Spring's own machi
   property whose column the library writes. Numbered rather than `?`, so a fragment can still use
   PostgreSQL's jsonb `?`, `?|` and `?&` operators.
 
-[`CHANGELOG.md`](CHANGELOG.md) carries the same list in detail, with the reasoning behind each rule,
-and [`docs/query-recipes.md`](docs/query-recipes.md) has the answers given in place of a feature —
-keyset pagination among them.
+[`CHANGELOG.md`](CHANGELOG.md) carries the same list with the reasoning behind each rule, and
+[`docs/query-recipes.md`](docs/query-recipes.md) has the answers given in place of a feature, keyset
+pagination among them.
 
 ## What it deliberately doesn't do
 
 - **No aggregate API.** No `GROUP BY`, `HAVING`, `UNION` or subquery vocabulary. "Parents that have
-  a child" is an `EXISTS` fragment through the raw door, not a join — a join expands where a
+  a child" is an `EXISTS` fragment through the raw door, not a join; a join expands where a
   restriction should not.
 - **Relationship members are not generated yet.** A property pointing at another aggregate is
   reported (`EM-N3`) and gets no constant, so joins are `JoinRef.of(source, target)` you write.
-  Types the metamodel cannot express yet — embedded values, generic entity types — are reported the
-  same way (`EM-N6`) rather than dropped in silence.
+  Types the metamodel cannot express yet — embedded values, generic entity types — or cannot name
+  from the generated class — a private nested type — are reported the same way (`EM-N6`) rather
+  than dropped in silence.
 - **Not JPA.** `jakarta.persistence` annotations are not read; the input is
-  `org.springframework.data.relational.core.mapping`. Discovery also needs `@Table` itself — the
+  `org.springframework.data.relational.core.mapping`. Discovery also needs `@Table` itself. The
   compiler does not present types carrying a stereotype composed over it, though such a type *is*
   recognised once another entity refers to it.
 - **Only part of Spring's read machinery applies,** because rows are materialised from their own
@@ -246,15 +291,15 @@ keyset pagination among them.
   one-time cost: Spring's introspection reads the projection's class file from disk on the event
   loop, cached afterwards.
 - **Schema resolution has sharp edges.** A `NamingStrategy` default is resolved once per entity and
-  cached, so it cannot route per tenant — a schema that must vary belongs on `@Table` as SpEL. A
+  cached, so it cannot route per tenant; a schema that must vary belongs on `@Table` as SpEL. A
   dotted `@Table("a.b")` reads as schema `a`, table `b`, which silently targets the wrong relation
   if a schema `a` holds a table `b`; `@Table(value = "a.b", schema = "…")` turns that off. The split
-  is this library's read path only. CHANGELOG has the full rule set.
-- **When a name that varies is read follows the argument list.** A terminal taking a `Pageable`
+  is this library's read path only. The CHANGELOG has the full rule set.
+- **When a varying name is read follows the argument list.** A terminal taking a `Pageable`
   defers, so `page`, `slice` and the windowed `all` resolve a SpEL `@Table` name on subscribe and
-  report a failure to resolve on the publisher; every other terminal resolves when you call it and
-  throws from the call. A publisher described under one tenant and subscribed under another
-  therefore reads different relations through the two groups.
+  report a failure on the publisher; every other terminal resolves when you call it and throws from
+  the call. A publisher described under one tenant and subscribed under another therefore reads
+  different relations through the two groups.
 - **One dialect is exercised end to end.** Rendering goes through Spring's own dialect machinery,
   but only PostgreSQL is tested.
 - **Across a module boundary, Gradle will not regenerate.** Editing a mapped supertype in another
@@ -262,41 +307,20 @@ keyset pagination among them.
   that columns resolve at use: a renamed property throws from `PropertyRef.columnName` rather than
   querying the wrong column.
 - **Frozen, not yet released.** The public signatures of `core`, `runtime` and `runtime-r2dbc`
-  froze on 2026-09-06 and every build runs a compatibility gate over them (Revapi plus
-  architecture tests pinning the exact foreign types a public signature may carry). The
-  consumer-facing promise starts with the first published version — nothing is on Maven Central
-  yet.
-
-## Compared with the alternatives
-
-Every option here solves a real problem. The question is whose, and what it couples you to.
-
-| | Hand-written constants | Spring Data alone | QueryDSL | jOOQ | entity-metamodel |
-|---|---|---|---|---|---|
-| Rename-safe references | no | no | yes | yes | **yes** |
-| Typed joins | n/a | no | yes (JDBC) | yes | **yes** |
-| Reactive R2DBC execution | n/a | yes | no first-party | yes | **yes** |
-| Metamodel derived from | you | — | entities | database schema | **your entities** |
-| Shares Spring Data's mapping context | yes | yes | no | no | **yes** |
-| Full SQL: aggregates, unions, windows, DML | — | no | yes | **yes** | no — deliberate |
-
-Two differences do most of the work. QueryDSL's SQL module executes over JDBC, so a reactive
-codebase gets no first-party executor. jOOQ is the strongest alternative and is schema-first: its
-metamodel comes from the database, so alongside Spring Data your column names, converters and entity
-mapping live in two systems that nothing keeps consistent. If your queries need aggregation, set
-operations or window functions as a matter of course, jOOQ is the right tool — and the two coexist
-without conflict, precisely because this one stops where full SQL begins.
+  froze on 2026-09-06 and every build runs a compatibility gate over them: Revapi, plus architecture
+  tests pinning the exact foreign types a public signature may carry. The consumer-facing promise
+  starts with the first published version.
 
 ## Requirements and installation
 
 - **Java 17+.** CI builds on 17, 21 and 25.
-- **No Maven install required.** `./mvnw` pins the build to Maven 3.9.11. If you use your own
-  Maven, the enforcer floor is 3.9.
+- **No Maven install required.** `./mvnw` pins the build to Maven 3.9.11. With your own Maven, the
+  enforcer floor is 3.9.
 - **Spring Data 4.0.x–4.1.x** (`spring-data-relational` / `spring-data-r2dbc`). Applications on the
   3.5.x line have to upgrade first.
 - **Any build that runs javac.** There is no build-tool plugin to install.
 
-Nothing is on Maven Central, so install it into your local repository first:
+Nothing is on Maven Central, so install the family into your local repository first:
 
 ```bash
 git clone https://github.com/VadimBabich/entity-metamodel.git
@@ -304,37 +328,13 @@ cd entity-metamodel
 ./mvnw -B install
 ```
 
-`./mvnw -B verify` additionally runs the integration tests: the query suite executes its statements
-against PostgreSQL in Testcontainers (skipped with a notice when Docker is unavailable locally).
+`./mvnw -B verify` additionally runs the integration suite, which executes its statements against
+PostgreSQL in Testcontainers and is skipped when Docker is unavailable locally, never in CI.
 
 ### Maven
 
-The processor goes on the annotation-processor path and never reaches your runtime classpath. The
-runtime goes on the compile path, because generated code imports it.
-
-```xml
-<dependency>
-  <groupId>io.github.vadimbabich</groupId>
-  <artifactId>entity-metamodel-runtime-r2dbc</artifactId>
-  <version>2.0.0-SNAPSHOT</version>
-</dependency>
-```
-
-```xml
-<plugin>
-  <groupId>org.apache.maven.plugins</groupId>
-  <artifactId>maven-compiler-plugin</artifactId>
-  <configuration>
-    <annotationProcessorPaths>
-      <path>
-        <groupId>io.github.vadimbabich</groupId>
-        <artifactId>entity-metamodel-processor</artifactId>
-        <version>2.0.0-SNAPSHOT</version>
-      </path>
-    </annotationProcessorPaths>
-  </configuration>
-</plugin>
-```
+The two blocks at the top of [Five minutes](#five-minutes): the runtime as a dependency, the
+processor under `annotationProcessorPaths`.
 
 ### Gradle
 
@@ -369,33 +369,33 @@ delegated Maven or Gradle build is the reliable path today.
 |---|---|---|
 | No `X__` classes anywhere | processor not on the annotation-processor path, or the type has no `@Table` | check `annotationProcessorPaths` / `annotationProcessor`; only `@Table` types get a metamodel |
 | `warning: No processor claimed any of these annotations` | `-Xlint:processing`; `@Table` is Spring's, and claiming it would take it from every other processor | `-Xlint:-processing`, or drop `-Werror` for that module |
-| One property has no constant | it refers to another aggregate (`EM-N3`), or its type cannot be expressed yet (`EM-N6`) | the build log carries the note; use a hand-written `JoinRef` or the raw door |
+| One property has no constant | it refers to another aggregate (`EM-N3`), or its type cannot be expressed yet or named from the generated class (`EM-N6`) | the build log carries the note; use a hand-written `JoinRef` or the raw door |
 | `EM-E6: … already exists` | a hand-written class collides with the generated name, or a stale generated file is an input | rename the type, or run a clean build |
+| `EM-E8: … rename the entity` | the entity's simple name contains `__` or ends with `_`; `EntityRef` refuses both as an alias, so the metamodel would fail when it loads | rename the entity |
 | An entity hydrates with a null field whose value is in the row | renderer and converter are behind two different mapping contexts | share one context, as in the executor bean above |
-| A `Pageable` sort is rejected | the sort names a property the entity does not persist | it arrives as an error signal on the publisher, not a thrown exception — map it to a bad request |
+| A `Pageable` sort is rejected | the sort names a property the entity does not persist | it arrives as an error signal on the publisher, not a thrown exception; map it to a bad request |
 | A `Criteria` is refused, naming a property | it used a column name; a column name can be another property's name, so resolving it would filter the wrong column | use the property name the message gives |
 
 ## Where it's going
 
-**Nothing goes to Maven Central until it is whole.** Maven Central is permanent, so the first
-release will be a version you can run end to end — generate a metamodel, build a query, execute it —
-rather than a milestone of parts. The API froze on 2026-09-06 behind a compatibility gate that runs
-in every build; what is left is packaging work, and the next step is a release candidate cut from
-`master` by the workflow below.
+**Nothing goes to Maven Central until it is whole.** Central is permanent, so the first release will
+be a version that runs end to end — generate a metamodel, build a query, execute it — rather than a
+milestone of parts. The API froze on 2026-09-06 behind a compatibility gate that runs in every
+build; what is left is packaging, and the next step is a release candidate cut from `master` by a
+dispatch-only workflow.
 
-When it does ship, each release is cut by a dispatch-only workflow that signs the artifacts,
-attaches their CycloneDX SBOMs to the GitHub release, and attests build provenance — so a jar
-obtained from Maven Central can be checked against the exact workflow run and commit that built it:
+When it ships, each release is signed, carries a CycloneDX SBOM, and attests its build provenance,
+so a jar from Central can be checked against the exact workflow run and commit that built it:
 `gh attestation verify <jar> --repo VadimBabich/entity-metamodel`.
 
 The 1.x Maven plugin that preceded this one was retired and removed from the repository on
-2026-08-30; it survives in git history and in its own tags. The generated shape it produced is not
-the shape produced now — metamodels no longer land in packages this project does not own — which was
-the point of the reboot.
+2026-08-30; it survives in git history and in its own tags. Its metamodels landed in packages this
+project does not own, which is the defect the reboot exists to remove.
 
 ## Documentation
 
-- [`CHANGELOG.md`](CHANGELOG.md) — what exists, in detail. The record the rest condenses from.
+- [`CHANGELOG.md`](CHANGELOG.md) — what exists, in detail; the record everything else condenses
+  from.
 - [`ROADMAP.md`](ROADMAP.md) — where it is going, and what gates the order.
 - [`docs/query-recipes.md`](docs/query-recipes.md) — keyset pagination and the other answers given
   in place of a feature, with the SQL each one renders.
@@ -403,15 +403,14 @@ the point of the reboot.
   anything touching the runtime.
 - [`docs/runbooks/golden-corpus-update.md`](docs/runbooks/golden-corpus-update.md) — how generated
   output is allowed to change.
-- The corpus is the most precise description of the generated shape there is:
+- The corpus itself is the most precise description of the generated shape:
   `entity-metamodel-processor/src/test/resources/contract-corpus/`.
 
 ## Contributing
 
 [`CONTRIBUTING.md`](CONTRIBUTING.md) covers the build and the conventions. Security reports go
-through GitHub's private advisories, per [`SECURITY.md`](SECURITY.md) — please do not open a public
+through GitHub's private advisories, per [`SECURITY.md`](SECURITY.md); please do not open a public
 issue for those.
 
-Bug reports are welcome; use-case reports more so. The design came from measured usage in real
-codebases rather than from guesswork, and that only keeps working if people describe what they are
-actually doing.
+Bug reports are welcome, use-case reports more so. The design came from measured usage in real
+codebases, and that only keeps working if people describe what they are actually doing.
