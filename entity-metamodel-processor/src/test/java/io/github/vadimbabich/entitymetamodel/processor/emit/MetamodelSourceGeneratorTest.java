@@ -108,6 +108,24 @@ class MetamodelSourceGeneratorTest {
         .contains("public final class Standalone__ {");
   }
 
+  @Test
+  void aNestedTypeInTheDefaultPackageIsWrittenVerbatimBecauseItCannotBeImported() {
+    ExistingTypes defaultPackageTypes = qualifiedClassName -> qualifiedClassName.equals("Standalone");
+
+    new MetamodelSourceGenerator(InclusionPolicy.SPRING_SEMANTICS, defaultPackageTypes)
+        .generate(
+            EntityModel.of(List.of(EntityDescriptor.builder("", "Standalone", TypeKind.CLASS)
+                .tableName("standalone")
+                .attribute(attribute("kind", TypeRef.of("Standalone.Kind")))
+                .build())),
+            sink,
+            diagnostics);
+
+    assertThat(sink.sourceOf("Standalone__"))
+        .doesNotContain("import Standalone.Kind;")
+        .contains("PropertyRef<Standalone, Standalone.Kind> KIND");
+  }
+
   private static AttributeDescriptor attribute(String name, TypeRef declaredType) {
     return AttributeDescriptor.of(name, declaredType, false, List.of());
   }

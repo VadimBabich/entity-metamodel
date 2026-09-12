@@ -1,6 +1,7 @@
 package io.github.vadimbabich.entitymetamodel.core;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * An exact declared Java type, carried verbatim — the fidelity that makes a generated
@@ -11,6 +12,7 @@ public record TypeRef(String qualifiedName, List<TypeArgument> typeArguments, in
 
   public TypeRef {
     requireText(qualifiedName, "qualifiedName");
+    Objects.requireNonNull(typeArguments, "typeArguments");
     typeArguments = List.copyOf(typeArguments);
     if (arrayDimensions < 0) {
       throw new IllegalArgumentException("arrayDimensions must not be negative");

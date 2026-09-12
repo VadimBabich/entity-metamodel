@@ -1,5 +1,8 @@
 package io.github.vadimbabich.entitymetamodel.runtime;
 
+import java.lang.reflect.Array;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.regex.Matcher;
@@ -33,7 +36,7 @@ public record SqlExpr(String sql, List<Object> arguments) implements Condition {
       throw new IllegalArgumentException("A raw SQL fragment must not be blank");
     }
 
-    arguments = List.copyOf(arguments);
+    arguments = detachedArgumentsOf(arguments);
     rejectUnresolvableReferences(sql, arguments.size());
   }
 
@@ -48,7 +51,40 @@ public record SqlExpr(String sql, List<Object> arguments) implements Condition {
   public static SqlExpr raw(String sql, Object... arguments) {
     Objects.requireNonNull(arguments, "arguments");
 
-    return new SqlExpr(sql, List.of(arguments));
+    return new SqlExpr(sql, Arrays.asList(arguments));
+  }
+
+  private static List<Object> detachedArgumentsOf(List<Object> arguments) {
+    List<Object> detached = new ArrayList<>(arguments.size());
+
+    for (int argumentIndex = 0; argumentIndex < arguments.size(); argumentIndex++) {
+      Object argument = arguments.get(argumentIndex);
+
+      Objects.requireNonNull(argument, "argument " + argumentIndex + " must not be null - a null"
+          + " cannot be bound without a type; write IS NULL into the fragment instead");
+
+      detached.add(copyIfArray(argument));
+    }
+
+    return List.copyOf(detached);
+  }
+
+  private static Object copyIfArray(Object argument) {
+    if (argument instanceof Object[] references) {
+      return references.clone();
+    }
+    if (!argument.getClass().isArray()) {
+      return argument;
+    }
+
+    int length = Array.getLength(argument);
+    Object copy = Array.newInstance(argument.getClass().getComponentType(), length);
+
+    for (int index = 0; index < length; index++) {
+      Array.set(copy, index, Array.get(argument, index));
+    }
+
+    return copy;
   }
 
   private static void rejectUnresolvableReferences(String sql, int argumentCount) {

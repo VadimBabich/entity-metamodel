@@ -1,7 +1,7 @@
 package io.github.vadimbabich.entitymetamodel.runtime;
 
+import java.util.ArrayList;
 import java.util.Collection;
-import java.util.List;
 import java.util.Objects;
 import org.springframework.data.relational.core.mapping.RelationalMappingContext;
 import org.springframework.data.relational.core.mapping.RelationalPersistentEntity;
@@ -36,18 +36,14 @@ public final class PropertyRef<E, T> {
     return declaredRawType;
   }
 
-  /**
-   * Re-anchors this property to another instance of the same entity.
-   */
+  /** Re-anchors this property to another instance of the same entity. */
   public PropertyRef<E, T> of(EntityRef<E> instance) {
     Objects.requireNonNull(instance, "instance");
 
     return new PropertyRef<>(instance, propertyName, declaredRawType);
   }
 
-  /**
-   * Equality against one value; {@code null} is rejected — use {@link #isNull()}.
-   */
+  /** Equality against one value; {@code null} is rejected — use {@link #isNull()}. */
   public Condition is(T value) {
     return new Comparison(this, Comparison.Operator.EQUAL, value);
   }
@@ -59,7 +55,7 @@ public final class PropertyRef<E, T> {
   public Condition in(Collection<? extends T> values) {
     Objects.requireNonNull(values, "values");
 
-    return new Inclusion(this, List.copyOf(values));
+    return new Inclusion(this, new ArrayList<>(values));
   }
 
   /**

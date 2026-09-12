@@ -6,6 +6,7 @@ import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeMirror;
@@ -57,15 +58,25 @@ public final class MappingAnnotations {
   }
 
   /**
-   * Whether the type is a mapped entity, through a stereotype as well as directly: a house
-   * annotation meta-annotated with {@code @Table} is one to the mapping context, so it is one here.
+   * Whether the type is a mapped entity, through a stereotype or a superclass as well as directly:
+   * a house annotation meta-annotated with {@code @Table} is one to the mapping context, and so is
+   * an unannotated subclass of an entity, so both are one here.
    *
    * <p>Root discovery stays literal — {@code getElementsAnnotatedWith} does not resolve
    * meta-annotations, so a stereotyped entity gets no metamodel of its own.
    */
   static boolean isEntity(Element element) {
-    return AnnotationFact.presentIn(
-        AnnotationFacts.factsOf(element.getAnnotationMirrors()), TABLE);
+    if (!(element instanceof TypeElement type)) {
+      return false;
+    }
+    if (AnnotationFact.presentIn(AnnotationFacts.factsOf(type.getAnnotationMirrors()), TABLE)) {
+      return true;
+    }
+    if (!(type.getSuperclass() instanceof DeclaredType superClass)) {
+      return false;
+    }
+
+    return isEntity(superClass.asElement());
   }
 
   /** The table name as declared, or empty when the annotation leaves it to the naming strategy. */

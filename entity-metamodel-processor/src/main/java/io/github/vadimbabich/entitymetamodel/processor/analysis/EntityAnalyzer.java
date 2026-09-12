@@ -1,9 +1,11 @@
 package io.github.vadimbabich.entitymetamodel.processor.analysis;
 
+import io.github.vadimbabich.entitymetamodel.core.AttributeDescriptor;
 import io.github.vadimbabich.entitymetamodel.core.EntityDescriptor;
 import io.github.vadimbabich.entitymetamodel.core.SuperTypeContribution;
 import io.github.vadimbabich.entitymetamodel.core.TypeKind;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +16,7 @@ import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeMirror;
@@ -34,6 +37,7 @@ public final class EntityAnalyzer {
   // Copied rather than referenced: the runtime is test-scope here. A contract test holds the two in
   // step, since a divergence is an entity this processor accepts and the runtime rejects at load.
   static final String RESERVED_SEPARATOR = "__";
+  static final String RESERVED_ALIAS_SUFFIX = "_";
 
   private static final String OBJECT = "java.lang.Object";
   private static final String RECORD = "java.lang.Record";
@@ -58,7 +62,7 @@ public final class EntityAnalyzer {
     Set<TypeElement> roots = new LinkedHashSet<>();
 
     for (Element annotated : annotatedElements) {
-      if (annotated instanceof TypeElement entity) {
+      if (annotated instanceof TypeElement entity && hasEntityKind(entity)) {
         roots.add(emissionRootOf(entity));
       }
     }
@@ -85,9 +89,7 @@ public final class EntityAnalyzer {
     return false;
   }
 
-  /**
-   * Empty when the entity cannot be read faithfully; the reason is reported before returning.
-   */
+  /** Empty when the entity cannot be read faithfully; the reason is reported before returning. */
   public Optional<EntityDescriptor> analyze(TypeElement entity) {
     if (entity.getSimpleName().toString().contains(RESERVED_SEPARATOR)) {
       messager.printMessage(
@@ -95,6 +97,15 @@ public final class EntityAnalyzer {
           "EM-E8: " + entity.getSimpleName() + " contains the reserved separator '"
               + RESERVED_SEPARATOR + "', which the runtime rejects when it aliases the entity;"
               + " rename the entity",
+          entity);
+
+      return Optional.empty();
+    }
+    if (entity.getSimpleName().toString().endsWith(RESERVED_ALIAS_SUFFIX)) {
+      messager.printMessage(
+          Diagnostic.Kind.ERROR,
+          "EM-E8: " + entity.getSimpleName() + " ends with '" + RESERVED_ALIAS_SUFFIX
+              + "', which the runtime rejects when it aliases the entity; rename the entity",
           entity);
 
       return Optional.empty();
@@ -121,13 +132,20 @@ public final class EntityAnalyzer {
     // One map per entity: an accessor anywhere in the hierarchy annotates its property, wherever
     // the field was declared.
     Map<String, List<AnnotationMirror>> accessors = attributeReader.accessorAnnotationsOf(entity);
+    PackageElement metamodelPackage = elements.getPackageOf(entity);
+    List<AttributeDescriptor> ownAttributes =
+        attributeReader.attributesOf(entity, entityType, accessors, metamodelPackage);
 
     EntityDescriptor.Builder descriptor = EntityDescriptor
-        .builder(packageOf(entity), entity.getQualifiedName().toString(), kindOf(entity))
+        .builder(
+            metamodelPackage.getQualifiedName().toString(),
+            entity.getQualifiedName().toString(),
+            kindOf(entity))
         .tableName(MappingAnnotations.declaredTableNameOf(entity))
-        .attributes(attributeReader.attributesOf(entity, entityType, accessors));
+        .attributes(ownAttributes);
 
-    for (SuperTypeContribution contribution : superTypeContributionsOf(entityType, accessors)) {
+    for (SuperTypeContribution contribution
+        : superTypeContributionsOf(entityType, ownAttributes, accessors, metamodelPackage)) {
       descriptor.superType(contribution);
     }
     for (TypeElement nestedEntity : nestedEntitiesOf(entity)) {
@@ -171,6 +189,7 @@ public final class EntityAnalyzer {
     Element enclosing = entity.getEnclosingElement();
 
     if (enclosing instanceof TypeElement enclosingType
+        && hasEntityKind(enclosingType)
         && MappingAnnotations.isEntity(enclosingType)) {
 
       return emissionRootOf(enclosingType);
@@ -183,7 +202,7 @@ public final class EntityAnalyzer {
     List<TypeElement> nested = new ArrayList<>();
 
     for (TypeElement candidate : ElementFilter.typesIn(entity.getEnclosedElements())) {
-      if (MappingAnnotations.isEntity(candidate)) {
+      if (hasEntityKind(candidate) && MappingAnnotations.isEntity(candidate)) {
         nested.add(candidate);
       }
     }
@@ -191,26 +210,66 @@ public final class EntityAnalyzer {
     return nested;
   }
 
+  private boolean hasEntityKind(TypeElement type) {
+    return type.getKind() == ElementKind.CLASS || type.getKind() == ElementKind.RECORD;
+  }
+
   // Nearest first, and nothing skipped for want of an annotation: the mapping context treats all
   // inherited state as part of the entity's table. The walk is over types rather than elements so
   // each supertype arrives instantiated — GenericBase<String>, not GenericBase<T>.
   private List<SuperTypeContribution> superTypeContributionsOf(
-      DeclaredType entityType, Map<String, List<AnnotationMirror>> accessors) {
+      DeclaredType entityType,
+      List<AttributeDescriptor> ownAttributes,
+      Map<String, List<AnnotationMirror>> accessors,
+      PackageElement metamodelPackage) {
+
     List<SuperTypeContribution> contributions = new ArrayList<>();
+    Set<String> hiddenByNearerExcludedMember =
+        membersWithoutAttribute((TypeElement) entityType.asElement(), entityType, ownAttributes);
     Optional<DeclaredType> superClass = superClassOf(entityType);
 
     while (superClass.isPresent()) {
       DeclaredType contributing = superClass.get();
       TypeElement contributingElement = (TypeElement) contributing.asElement();
+      List<AttributeDescriptor> inherited = attributeReader.attributesOf(
+          contributingElement, contributing, accessors, metamodelPackage);
 
       contributions.add(SuperTypeContribution.of(
           contributingElement.getQualifiedName().toString(),
-          attributeReader.attributesOf(contributingElement, contributing, accessors)));
+          withoutNames(inherited, hiddenByNearerExcludedMember)));
 
+      hiddenByNearerExcludedMember.addAll(
+          membersWithoutAttribute(contributingElement, contributing, inherited));
       superClass = superClassOf(contributing);
     }
 
     return contributions;
+  }
+
+  private Set<String> membersWithoutAttribute(
+      TypeElement type, DeclaredType containing, List<AttributeDescriptor> attributes) {
+
+    Set<String> names = new HashSet<>(attributeReader.memberNamesOf(type, containing));
+
+    for (AttributeDescriptor attribute : attributes) {
+      names.remove(attribute.name());
+    }
+
+    return names;
+  }
+
+  private List<AttributeDescriptor> withoutNames(
+      List<AttributeDescriptor> attributes, Set<String> names) {
+
+    List<AttributeDescriptor> kept = new ArrayList<>();
+
+    for (AttributeDescriptor attribute : attributes) {
+      if (!names.contains(attribute.name())) {
+        kept.add(attribute);
+      }
+    }
+
+    return kept;
   }
 
   private Optional<DeclaredType> superClassOf(DeclaredType type) {
@@ -244,9 +303,5 @@ public final class EntityAnalyzer {
     }
 
     return TypeKind.CLASS;
-  }
-
-  private String packageOf(TypeElement entity) {
-    return elements.getPackageOf(entity).getQualifiedName().toString();
   }
 }

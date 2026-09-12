@@ -2,6 +2,7 @@ package io.github.vadimbabich.entitymetamodel.core;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Everything a frontend knows about one entity type. Attributes keep declaration order and
@@ -23,6 +24,11 @@ public record EntityDescriptor(
   public EntityDescriptor {
     TypeRef.requireText(qualifiedName, "qualifiedName");
     requireQualifiedNameInPackage(packageName, qualifiedName);
+    Objects.requireNonNull(kind, "kind");
+    Objects.requireNonNull(tableName, "tableName");
+    Objects.requireNonNull(attributes, "attributes");
+    Objects.requireNonNull(superTypes, "superTypes");
+    Objects.requireNonNull(nestedEntities, "nestedEntities");
     attributes = List.copyOf(attributes);
     superTypes = List.copyOf(superTypes);
     nestedEntities = List.copyOf(nestedEntities);

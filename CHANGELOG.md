@@ -43,8 +43,12 @@ so a build tool can regenerate one file rather than all of them — asserted by 
 end to end on Gradle: editing a supertype regenerates the metamodels that inherit from it, editing
 an entity keeps its inherited members, and editing nothing recompiles nothing. Every member it
 cannot express yet — embedded values, references to other aggregates, generic entity types — is
-reported instead of dropped in silence, and a member name that two properties would share is an
-error rather than a duplicate field. A member is recognised as a relationship when the type it
+reported instead of dropped in silence, as is a member whose type the generated class could not
+name: a private nested type, or a non-public one inherited from another package. A member name that
+two properties would share is an error rather than a duplicate field, and so is an entity whose
+simple name contains `__` or ends with `_`: `EntityRef` refuses both as an alias — the first
+collides with the projected-label separator, the second lets one instance's label prefix begin
+another's — so the metamodel would compile and then fail in its static initializer. A member is recognised as a relationship when the type it
 refers to is itself a mapped entity — not by `@MappedCollection`, which Spring treats as optional.
 Whether any other non-simple type is one column or another aggregate depends on the converters a
 context registers, so that answer comes from the context at resolution time. A committed corpus of

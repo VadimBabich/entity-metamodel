@@ -112,10 +112,25 @@ class RefEqualityContractTest {
   }
 
   @Test
+  void anAliasEndingInAnUnderscoreIsRejectedBecauseItsLabelsWouldOverlapAShorterAlias() {
+    EntityRef<Account> account = EntityRef.of(Account.class);
+
+    assertThatIllegalArgumentException()
+        .isThrownBy(() -> account.as("x_"))
+        .withMessageContaining("underscore");
+    assertThatIllegalArgumentException()
+        .isThrownBy(() -> EntityRef.of(Ledger_.class))
+        .withMessageContaining("underscore");
+  }
+
+  @Test
   void reAliasingExtendsTheAliasInsteadOfReplacingTheQualifier() {
     EntityRef<Account> account = EntityRef.of(Account.class);
 
     assertThat(account.as("a").as("b").alias()).isEqualTo("account_a_b");
     assertThat(account.as("a").as("b")).isNotEqualTo(account.as("b"));
+  }
+
+  private static final class Ledger_ {
   }
 }

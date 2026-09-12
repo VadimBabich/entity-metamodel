@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import io.github.vadimbabich.entitymetamodel.runtime.fixtures.Account;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
@@ -80,6 +81,15 @@ class ConditionVocabularyTest {
     assertThatExceptionOfType(IllegalArgumentException.class)
         .isThrownBy(() -> id.in(List.of()))
         .withMessageContaining("empty");
+  }
+
+  @Test
+  void anInListCarryingNullIsRejectedNamingTheAlternative() {
+    PropertyRef<Account, Long> id = ACCOUNT.property("id", Long.class);
+
+    assertThatNullPointerException()
+        .isThrownBy(() -> id.in(Arrays.asList(1L, null)))
+        .withMessageContaining("isNull()");
   }
 
   @Test

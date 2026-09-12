@@ -1,6 +1,7 @@
 package io.github.vadimbabich.entitymetamodel.core;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * One declared attribute. Facts are carried for every attribute; which ones a generator includes is
@@ -11,6 +12,8 @@ public record AttributeDescriptor(
 
   public AttributeDescriptor {
     TypeRef.requireText(name, "name");
+    Objects.requireNonNull(declaredType, "declaredType");
+    Objects.requireNonNull(annotations, "annotations");
     annotations = List.copyOf(annotations);
   }
 

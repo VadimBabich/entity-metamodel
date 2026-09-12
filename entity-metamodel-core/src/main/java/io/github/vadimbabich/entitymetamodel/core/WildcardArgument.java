@@ -1,6 +1,7 @@
 package io.github.vadimbabich.entitymetamodel.core;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * A wildcard type argument, carried as declared: {@code ?}, {@code ? extends T} or
@@ -19,6 +20,8 @@ public record WildcardArgument(Bound bound, List<TypeRef> boundType) implements 
   }
 
   public WildcardArgument {
+    Objects.requireNonNull(bound, "bound");
+    Objects.requireNonNull(boundType, "boundType");
     boundType = List.copyOf(boundType);
 
     if (bound == Bound.UNBOUNDED && !boundType.isEmpty()) {

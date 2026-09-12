@@ -14,6 +14,7 @@ import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
+import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.RecordComponentElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
@@ -65,7 +66,10 @@ final class AttributeReader {
   }
 
   List<AttributeDescriptor> attributesOf(
-      TypeElement type, DeclaredType containing, Map<String, List<AnnotationMirror>> accessors) {
+      TypeElement type,
+      DeclaredType containing,
+      Map<String, List<AnnotationMirror>> accessors,
+      PackageElement metamodelPackage) {
 
     List<AttributeDescriptor> attributes = new ArrayList<>();
 
@@ -75,6 +79,9 @@ final class AttributeReader {
       if (readability != DeclaredTypes.Readability.READABLE) {
         reportOnce(type, member, "EM-N6: " + type.getSimpleName() + "." + member.name()
             + " has a type this metamodel cannot express and has no generated member");
+      } else if (!DeclaredTypes.isAccessibleFrom(member.declaredType(), metamodelPackage)) {
+        reportOnce(type, member, "EM-N6: " + type.getSimpleName() + "." + member.name()
+            + " has a type the generated metamodel cannot access and has no generated member");
       } else if (MappingAnnotations.referencesAnEntity(member.declaredType())) {
         // Not a column of this table, and @MappedCollection is optional — the type says so.
         reportOnce(type, member, "EM-N3: " + type.getSimpleName() + "." + member.name()
@@ -85,6 +92,16 @@ final class AttributeReader {
     }
 
     return attributes;
+  }
+
+  Set<String> memberNamesOf(TypeElement type, DeclaredType containing) {
+    Set<String> names = new HashSet<>();
+
+    for (Member member : membersOf(type, containing, Map.of())) {
+      names.add(member.name());
+    }
+
+    return names;
   }
 
   private AttributeDescriptor attributeOf(Member member) {

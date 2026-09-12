@@ -44,7 +44,8 @@ final class ImportScope {
 
     // Forced renderings first, so the claims are complete before anything is imported.
     for (String referenced : new TreeSet<>(referencedTypes)) {
-      if (hasNoPackage(referenced)) {
+      if (hasNoPackage(referenced)
+          || isNestedInTheDefaultPackage(packageName, referenced, existingTypes)) {
         renderings.put(referenced, referenced);
       } else if (isInPackage(packageName, referenced)) {
         String simpleName = simpleNameOf(referenced);
@@ -147,6 +148,18 @@ final class ImportScope {
   // A primitive, or a type in the default package: written as-is either way.
   private static boolean hasNoPackage(String qualifiedTypeName) {
     return !qualifiedTypeName.contains(".");
+  }
+
+  private static boolean isNestedInTheDefaultPackage(
+      String packageName, String qualifiedTypeName, ExistingTypes existingTypes) {
+
+    if (!packageName.isEmpty()) {
+      return false;
+    }
+
+    String outermostTypeName = qualifiedTypeName.substring(0, qualifiedTypeName.indexOf('.'));
+
+    return existingTypes.contains(outermostTypeName);
   }
 
   private static String simpleNameOf(String qualifiedTypeName) {
