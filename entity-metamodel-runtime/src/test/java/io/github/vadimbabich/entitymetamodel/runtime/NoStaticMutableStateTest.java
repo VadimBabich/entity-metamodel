@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
+
 import org.junit.jupiter.api.Test;
 
 /**
@@ -22,6 +23,8 @@ import org.junit.jupiter.api.Test;
  * can remove them.
  */
 class NoStaticMutableStateTest {
+
+  private static final Class<?> MODULE_ANCHOR = EntityRef.class;
 
   // Pattern is documented immutable and safe for concurrent use.
   private static final List<Class<?>> IMMUTABLE_STATIC_TYPES =
@@ -70,10 +73,13 @@ class NoStaticMutableStateTest {
         continue;
       }
 
-      boolean immutableField = Modifier.isFinal(declared.getModifiers())
-          && (declared.getType().isPrimitive()
-              || IMMUTABLE_STATIC_TYPES.contains(declared.getType()));
-      if (!immutableField) {
+      if (!Modifier.isFinal(declared.getModifiers())) {
+        return false;
+      }
+
+      boolean immutableFieldType = declared.getType().isPrimitive()
+          || IMMUTABLE_STATIC_TYPES.contains(declared.getType());
+      if (!immutableFieldType) {
         return false;
       }
     }
@@ -82,8 +88,13 @@ class NoStaticMutableStateTest {
   }
 
   private List<Class<?>> allModuleClasses() throws URISyntaxException {
+    assertThat(MODULE_ANCHOR.getPackageName())
+        .as("MODULE_ANCHOR must name a class in the module under test, or this sweep walks "
+            + "another module's classes and passes without enforcing anything here")
+        .startsWith(getClass().getPackageName());
+
     Path classesRoot = Path.of(
-        EntityRef.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+        MODULE_ANCHOR.getProtectionDomain().getCodeSource().getLocation().toURI());
 
     try (Stream<Path> classFiles = Files.walk(classesRoot)) {
       List<Class<?>> moduleClasses = new ArrayList<>();
@@ -105,7 +116,7 @@ class NoStaticMutableStateTest {
         .replaceAll("\\.class$", "");
 
     try {
-      return Class.forName(binaryName, false, EntityRef.class.getClassLoader());
+      return Class.forName(binaryName, false, MODULE_ANCHOR.getClassLoader());
     } catch (ClassNotFoundException e) {
       throw new IllegalStateException("Module class not loadable: " + binaryName, e);
     }
