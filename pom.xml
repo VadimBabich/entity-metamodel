@@ -127,6 +127,14 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
           <version>${maven-surefire-plugin.version}</version>
+          <configuration>
+            <systemPropertyVariables>
+              <!-- Tests that read a sibling module's sources or POM resolve them from here rather
+                   than from a guess about the working directory. Interpolated per module, so it is
+                   correct for every direct child. -->
+              <maven.reactor.root>${project.basedir}/..</maven.reactor.root>
+            </systemPropertyVariables>
+          </configuration>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>

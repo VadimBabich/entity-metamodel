@@ -87,13 +87,6 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
-        <configuration>
-          <systemPropertyVariables>
-            <!-- The test reads its sibling modules' POMs, so it needs the reactor root as a
-                 fact rather than as an assumption about the working directory. -->
-            <maven.reactor.root>${project.basedir}/..</maven.reactor.root>
-          </systemPropertyVariables>
-        </configuration>
         <executions>
           <execution>
             <id>run-reactor-wiring-tests</id>
