@@ -15,6 +15,8 @@ indent_style = space
 indent_size = 2
 continuation_indent_size = 4
 max_line_length = 100
+ij_java_imports_layout = $*, |, *
+ij_java_doc_do_not_wrap_if_one_line = true
 
 [*.{xml,yml,yaml,json}]
 indent_size = 2
