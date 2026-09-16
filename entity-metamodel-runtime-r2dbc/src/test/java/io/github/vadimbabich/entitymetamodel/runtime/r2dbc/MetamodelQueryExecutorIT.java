@@ -582,7 +582,6 @@ class MetamodelQueryExecutorIT {
 
   @Test
   void aFirstPageShorterThanItsRequestNeedsNoCountEither() {
-    // The other elided branch: nothing was skipped and the page did not fill.
     statements.mark();
 
     StepVerifier.create(
@@ -601,8 +600,6 @@ class MetamodelQueryExecutorIT {
 
   @Test
   void aPageCountsOnlyWhatTheFilterKeeps() {
-    // A full page leaves rows unaccounted for, so this one does count — and the count must apply
-    // the same filter the page did.
     statements.mark();
 
     StepVerifier.create(
@@ -904,7 +901,7 @@ class MetamodelQueryExecutorIT {
   @Test
   void aKeysetPredicateOnTheLeadingKeyAloneSkipsRowsThatShareIt() {
     // Deliberately the wrong recipe, kept because it is the failure the right one prevents and the
-    // reason the README states a unique terminal key as a caller obligation: standing after (1,
+    // reason the recipe doc states a unique terminal key as a caller obligation: standing after (1,
     // 10), a predicate on accountId alone jumps silently past membership 11, which shares it.
     assertPageAfter(membershipAccountId().gt(1L), 12L);
   }
@@ -936,6 +933,22 @@ class MetamodelQueryExecutorIT {
     assertPageAfter(rowValueKeysetAfter(1L, 11L), 12L);
     assertPageAfter(rowValueKeysetAfter(2L, 12L), 13L);
     assertPageAfter(rowValueKeysetAfter(999L, 13L));
+  }
+
+  @Test
+  void theExpandedFormWalksAMixedDirectionSortWithEachKeyTakingItsOwnOperator() {
+    // Descending by accountId, ascending by membershipId: (999,13), (2,12), (1,10), (1,11). One
+    // operator shared by both keys still renders and still runs, and walks the wrong order.
+    assertLeadingRow(leadingKeyDescendingThenIdAscending(), 13L);
+
+    assertMixedDirectionPageAfter(
+        expandedKeysetAfterLeadingDescendingTerminalAscending(999L, 13L), 12L);
+    assertMixedDirectionPageAfter(
+        expandedKeysetAfterLeadingDescendingTerminalAscending(2L, 12L), 10L);
+    assertMixedDirectionPageAfter(
+        expandedKeysetAfterLeadingDescendingTerminalAscending(1L, 10L), 11L);
+    assertMixedDirectionPageAfter(
+        expandedKeysetAfterLeadingDescendingTerminalAscending(1L, 11L));
   }
 
   // One keyset step: the leading page of the sort both recipes are written against, narrowed by
@@ -982,6 +995,22 @@ class MetamodelQueryExecutorIT {
 
   private static Condition rowValueKeysetBefore(long cursorAccountId, long cursorMembershipId) {
     return ProductionPatterns.rowValueKeysetBefore(
+        membershipAccountId(), cursorAccountId, membershipId(), cursorMembershipId);
+  }
+
+  private void assertMixedDirectionPageAfter(Condition after, Long... expectedIds) {
+    assertLeadingRow(leadingKeyDescendingThenIdAscending().where(after), expectedIds);
+  }
+
+  private static FluentSelect<Membership> leadingKeyDescendingThenIdAscending() {
+    return FluentSelect.from(MEMBERSHIP)
+        .orderBy(membershipAccountId().desc(), membershipId().asc())
+        .limit(1);
+  }
+
+  private static Condition expandedKeysetAfterLeadingDescendingTerminalAscending(
+      long cursorAccountId, long cursorMembershipId) {
+    return ProductionPatterns.expandedKeysetAfterLeadingDescendingTerminalAscending(
         membershipAccountId(), cursorAccountId, membershipId(), cursorMembershipId);
   }
 
@@ -1182,7 +1211,6 @@ class MetamodelQueryExecutorIT {
                 assertThat(accounts).extracting(account -> account.id).containsExactly(1L, 1L, 2L))
         .verifyComplete();
 
-    // Two accounts match; three rows do.
     StepVerifier.create(executor.count(perMembership)).expectNext(3L).verifyComplete();
   }
 
@@ -1205,7 +1233,6 @@ class MetamodelQueryExecutorIT {
 
   @Test
   void distinctCollapsesAMultipliedDescriptionToItsDistinctRows() {
-    // The remedy for the multiplication the two tests above pin.
     FluentSelect<Account> distinctAccounts =
         FluentSelect.from(ACCOUNT)
             .join(memberships())
@@ -1260,7 +1287,7 @@ class MetamodelQueryExecutorIT {
 
   @Test
   void aCorrelatedExistsFragmentRestrictsWithoutMultiplyingOrDeduplicating() {
-    // The third remedy: nothing joins, so the count is entity-shaped without a derived table.
+    // Nothing joins, so the count is entity-shaped without the derived table a distinct count needs.
     FluentSelect<Account> withMemberships =
         FluentSelect.from(ACCOUNT)
             .where(
