@@ -9,8 +9,9 @@ import io.github.vadimbabich.entitymetamodel.runtime.Condition;
 import org.junit.jupiter.api.Test;
 
 /**
- * The query recipes the README publishes, rendered through the same renderer a caller would use.
- * A recipe stands in place of a feature here, and a published example nothing exercises rots first.
+ * The query recipes query-recipes.md publishes, rendered through the same renderer a caller would
+ * use. A recipe stands in place of a feature here, and a published example nothing exercises rots
+ * first.
  */
 class DocumentedRecipeRenderingTest {
 
@@ -66,8 +67,8 @@ class DocumentedRecipeRenderingTest {
 
   @Test
   void theRowValueKeysetPredicateParenthesisesOnEitherSideOfACallersFilter() {
-    // The README promises both recipes compose "with a filter of your own on either side". The raw
-    // door carries no operator precedence of its own, so this is the assertion that promise needs.
+    // The recipe doc promises both forms compose "with a filter of your own on either side". The
+    // raw door carries no operator precedence of its own, so this is the assertion it needs.
     RenderedStatement filterThenKeyset =
         renderer.render(
             FluentSelect.from(ACCOUNT)
@@ -102,6 +103,28 @@ class DocumentedRecipeRenderingTest {
     assertThat(statement.sql())
         .contains("WHERE (\"account\".\"owner_email\", \"account\".\"account_id\") < ($1, $2)")
         .endsWith("ORDER BY \"account\".\"owner_email\" DESC, \"account\".\"account_id\" DESC");
+  }
+
+  @Test
+  void theMixedDirectionExpandedPredicateGivesEachKeyTheOperatorOfItsOwnDirection() {
+    RenderedStatement statement =
+        renderer.render(
+            FluentSelect.from(ACCOUNT)
+                .where(mixedDirectionExpandedKeysetAfter())
+                .orderBy(ownerEmail().desc(), accountId().asc()));
+
+    assertThat(statement.sql())
+        .contains(
+            "WHERE (\"account\".\"owner_email\" < $1)"
+                + " OR ((\"account\".\"owner_email\" = $2)"
+                + " AND (\"account\".\"account_id\" > $3))")
+        .endsWith("ORDER BY \"account\".\"owner_email\" DESC, \"account\".\"account_id\" ASC");
+    assertThat(statement.values()).containsExactly(CURSOR_EMAIL, CURSOR_EMAIL, CURSOR_ID);
+  }
+
+  private static Condition mixedDirectionExpandedKeysetAfter() {
+    return ProductionPatterns.expandedKeysetAfterLeadingDescendingTerminalAscending(
+        ownerEmail(), CURSOR_EMAIL, accountId(), CURSOR_ID);
   }
 
   private static Condition expandedKeysetAfter() {

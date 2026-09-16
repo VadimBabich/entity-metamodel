@@ -2,8 +2,8 @@
 
 The answers this library gives in place of a feature. The SQL each one renders is pinned by
 `DocumentedRecipeRenderingTest`, `PageableTranslationTest` and `SortAndPaginationRenderingTest`, and
-the keyset traversals are walked against PostgreSQL in the integration suite, so a published recipe
-cannot quietly stop working.
+the keyset traversals — including the mixed-direction form — are walked against PostgreSQL in the
+integration suite, so a published recipe cannot quietly stop working.
 
 `byOwner` below is the description built in the [README](../README.md#five-minutes).
 
@@ -24,7 +24,10 @@ Mono<Boolean> more = executor.exists(byOwner.offset(20));
 
 **Keyset (cursor) pagination.** There is no keyset terminal, and both predicate forms are
 expressible today with no library change. The metamodel supplies the qualified column names either
-way, so neither spells out a table alias and neither carries an injection exposure.
+way, so neither spells out a table alias, and neither carries an injection exposure as long as the
+template stays a literal: choose between the two templates below with a branch on the sort's
+direction, and never assemble one from request data. The bind values are the only part a caller
+supplies.
 
 Prefer the row-value form wherever the sort runs one direction throughout — it is the only one of
 the two that PostgreSQL turns into an index seek. **The comparison inverts with the sort:** `>`
@@ -45,11 +48,44 @@ Condition after =
 Getting that operator wrong is silent: the SQL is valid, the plan still seeks, and the traversal
 re-serves the leading page for ever.
 
+That preference is PostgreSQL's, and the row-value form is not portable. **Oracle** refuses it
+outright (`ORA-01796`: lists compare only for equivalence), and **SQL Server** has no row-value
+comparison at all. **MySQL** accepts it but does not seek on it, as of 8.4: its range optimizer
+handles row constructors only under `IN()` (still so in the 9.7 manual), and a verified bug report
+(MySQL Bug #111952, reproduced on 8.4.8) shows `(p, i) > (?, ?)` on a primary key running as a full
+index scan where the expanded form runs as a range scan — so on MySQL the expanded form is the
+indexed one, not the fallback. A decomposition patch was contributed upstream in 2024 (Bug #108116)
+and has not been released; on a newer MySQL, `EXPLAIN` the row-value form before trusting this
+paragraph. On those three dialects the expanded form below is the answer for every sort, mixed or
+not, and the PostgreSQL measurement below does not describe them. Only PostgreSQL is exercised by
+this repository's suite.
+
+`SqlExpr.raw` takes `Object...`, so unlike the expanded form a cursor of the wrong type compiles and
+fails only at execution. A small generic helper restores the check with no library change — the
+shape this repository's own tests use:
+
+```java
+static <E, L, T> Condition rowValueAfter(
+    PropertyRef<E, L> leadingKey, L leadingCursor, PropertyRef<E, T> terminalKey, T terminalCursor) {
+  return SqlExpr.raw(
+      "({0}, {1}) > ({2}, {3})", leadingKey, terminalKey, leadingCursor, terminalCursor);
+}
+```
+
 The expanded form is the fallback for a mixed-direction sort, which the row-value form cannot
-express. It is correct and portable, and it is **not** free:
+express. It is correct and portable, and on PostgreSQL it is **not** free:
 
 ```java
 Condition after = Account__.OWNER_EMAIL.gt(cursorEmail)
+    .or(Account__.OWNER_EMAIL.is(cursorEmail).and(Account__.ID.gt(cursorId)));
+```
+
+For a mixed-direction sort each key takes the operator of its own direction — the leading key's
+follows its sort, the tie-breaker's follows its own. Standing after (`cursorEmail`, `cursorId`) under
+`ORDER BY owner_email DESC, account_id ASC`:
+
+```java
+Condition after = Account__.OWNER_EMAIL.lt(cursorEmail)
     .or(Account__.OWNER_EMAIL.is(cursorEmail).and(Account__.ID.gt(cursorId)));
 ```
 
@@ -68,11 +104,13 @@ columns, `ANALYZE`, page size 20, cursor at the 90th percentile **of the index o
 | execution | 0.05 ms | 14.47 ms |
 
 The gap grows with depth — a sweep over the same data timed the expanded form at 1.9 / 9.3 / 16.1 ms
-at the 10th, 50th and 90th percentile, while the row-value form stayed flat at ~0.03 ms. **The
-expanded form uses the index for ordering only, so it reproduces the deep-page degradation keyset
-pagination exists to remove.** The timings are point-in-time and the build does not re-check them;
-the plan shapes are the durable part. If your sort is mixed-direction and your pages go deep,
-reversing the whole sort to make it uniform is usually the better trade.
+at the 10th, 50th and 90th percentile, while the row-value form stayed flat at ~0.03 ms. **On
+PostgreSQL the expanded form uses the index for ordering only, so it reproduces the deep-page
+degradation keyset pagination exists to remove.** That is PostgreSQL's planner, not a property of the
+form: MySQL ranges on the expanded form and scans on the row-value one. The timings are
+point-in-time and the build does not re-check them; the plan shapes are the durable part. On
+PostgreSQL, if your sort is mixed-direction and your pages go deep, reversing the whole sort to make
+it uniform — so the row-value form applies — is usually the better trade.
 
 What the library cannot check here, and you must:
 

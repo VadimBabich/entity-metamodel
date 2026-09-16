@@ -35,8 +35,6 @@ final class ProductionPatterns {
   private ProductionPatterns() {
   }
 
-  // Named once: two suites traversing "the same" join through private copies could drift onto
-  // different topologies without either noticing.
   static JoinRef<Membership, Account> owningAccount() {
     return JoinRef.of(membershipAccountId(), accountKeyOf(ACCOUNT));
   }
@@ -45,7 +43,7 @@ final class ProductionPatterns {
     return JoinRef.of(membershipSponsorAccountId(), accountKeyOf(ACCOUNT));
   }
 
-  // The reverse direction, and the to-many shape that multiplies rows.
+  // The to-many side, so traversing it multiplies rows.
   static JoinRef<Account, Membership> memberships() {
     return JoinRef.of(accountKeyOf(ACCOUNT), membershipAccountId());
   }
@@ -59,9 +57,8 @@ final class ProductionPatterns {
   }
 
   /**
-   * The dominant shape: a listing scoped to one principal by joining a permission view under an
-   * {@code ON} carrying the principal and an access flag as binds. All four instances are
-   * projected because the caller reads the access flags off the same row.
+   * The dominant shape: a listing scoped to one principal through a permission view. All four
+   * instances are projected because the caller reads the access flags off the same row.
    */
   static FluentSelect<Membership> scopedListing() {
     return FluentSelect.from(MEMBERSHIP)
@@ -76,7 +73,6 @@ final class ProductionPatterns {
         .on(grantedToPrincipal(GRANT, membershipAccountId().eq(grantKeyOf(GRANT))));
   }
 
-  /** The same listing as a page: a listing endpoint sorts, then pages. */
   static FluentSelect<Membership> pagedScopedListing() {
     return scopedListing()
         .orderBy(ownerEmail().asc())
@@ -85,9 +81,8 @@ final class ProductionPatterns {
   }
 
   /**
-   * The licence shape: one permission view joined twice under distinct aliases, the second keyed on
-   * a fallback expression rather than a column. The raw door carries the expression, the library
-   * writes the aliases.
+   * The licence shape: one permission view joined twice. The raw door carries the fallback
+   * expression the second join is keyed on, and the library writes both aliases.
    */
   static FluentSelect<Membership> doubleGrantSelfJoin() {
     Condition licenceKeyedOnFallback =
@@ -115,10 +110,7 @@ final class ProductionPatterns {
     return FluentSelect.from(ACCOUNT).where(accountKeyOf(ACCOUNT).gt(0L).and(search));
   }
 
-  /**
-   * The filter a search endpoint receives already built, in the deepest shape a REST filter layer
-   * produces: a group of range tests joined by OR, narrowed by a further test.
-   */
+  /** The filter a search endpoint receives already built, in the deepest shape one produces. */
   static CriteriaDefinition receivedFilter() {
     return Criteria.empty()
         .and(Criteria.where("id").between(1L, 2L).or("id").is(3L))
@@ -126,16 +118,12 @@ final class ProductionPatterns {
         .isNotNull();
   }
 
-  /** That filter, narrowing a scope the caller owns. */
   static FluentSelect<Account> scopeNarrowedByReceivedFilter(Condition received) {
     return FluentSelect.from(ACCOUNT)
         .where(ACCOUNT.property("state", AccountState.class).is(AccountState.ACTIVE).and(received));
   }
 
-  /**
-   * The README's expanded keyset predicate: the leading key advances, or it ties and the terminal
-   * key breaks the tie. The only form a mixed-direction sort can use.
-   */
+  /** query-recipes.md's expanded keyset predicate, for an all-ascending sort. */
   static <E, L, T> Condition expandedKeysetAfter(
       PropertyRef<E, L> leadingKey,
       L leadingCursor,
@@ -147,9 +135,21 @@ final class ProductionPatterns {
         .or(leadingKey.is(leadingCursor).and(terminalKey.gt(terminalCursor)));
   }
 
+  /** The same shape for a mixed-direction sort, which is the only form that can express one. */
+  static <E, L, T> Condition expandedKeysetAfterLeadingDescendingTerminalAscending(
+      PropertyRef<E, L> leadingKey,
+      L leadingCursor,
+      PropertyRef<E, T> terminalKey,
+      T terminalCursor) {
+
+    return leadingKey
+        .lt(leadingCursor)
+        .or(leadingKey.is(leadingCursor).and(terminalKey.gt(terminalCursor)));
+  }
+
   /**
-   * The README's row-value keyset predicate, for a sort that runs one direction throughout. The
-   * comparison inverts with the sort, so both forms are pinned: reaching for the wrong one is
+   * query-recipes.md's row-value keyset predicate, for a sort that runs one direction throughout.
+   * The comparison inverts with the sort, so both forms are pinned: reaching for the wrong one is
    * silent.
    */
   static <E, L, T> Condition rowValueKeysetAfter(
@@ -181,8 +181,8 @@ final class ProductionPatterns {
         .orderBy(ExpressionSort.desc(SqlExpr.raw("length({0})", ownerEmail())));
   }
 
-  // The permission join's ON: whatever keys the grant to the row, plus the principal and the access
-  // flag as binds. The key is a column equality ordinarily and an expression in the licence case.
+  // The permission join's ON. Its key is a column equality ordinarily, an expression in the
+  // licence case, so the caller passes it in.
   private static Condition grantedToPrincipal(EntityRef<AccessGrant> grant, Condition keyedOn) {
     return keyedOn
         .and(grant.property("principalId", Long.class).is(PRINCIPAL_ID))
