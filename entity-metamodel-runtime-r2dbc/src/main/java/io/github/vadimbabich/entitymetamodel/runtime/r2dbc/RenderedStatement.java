@@ -9,8 +9,9 @@ import java.util.function.Function;
  * table instance was given in it — hydration reads what rendering assigned rather than deriving it
  * again.
  *
- * <p>{@link #preview()} answers "what will this send" without the library logging anything, so the
- * consumer keeps their own log policy.
+ * <p>The emitted SQL text is not part of the compatibility contract: {@link #sql()},
+ * {@link #preview()} and {@link #previewWithValues()} are for inspection and logging, not a stable
+ * string.
  */
 public record RenderedStatement(
     String sql, List<Binding> bindings, StatementAliases aliases) {

@@ -12,7 +12,7 @@ import java.lang.annotation.Target;
  * from untrusted input, and pass values as bind parameters.
  */
 @Documented
-@Retention(RetentionPolicy.CLASS)
+@Retention(RetentionPolicy.RUNTIME)
 @Target({ElementType.METHOD, ElementType.TYPE})
 public @interface RawSql {
 }

@@ -1,10 +1,14 @@
 package io.github.vadimbabich.entitymetamodel.runtime.r2dbc;
 
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ACCOUNT;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.MEMBERSHIP;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.SPONSOR;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.accountId;
 import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.ProductionPatterns.ownerEmail;
+import static io.github.vadimbabich.entitymetamodel.runtime.r2dbc.DeepConditions.SUPPORTED_NESTING;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 
 import io.github.vadimbabich.entitymetamodel.runtime.Condition;
 import io.github.vadimbabich.entitymetamodel.runtime.EntityRef;
@@ -18,6 +22,7 @@ import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.SchemaDocume
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.ThreePartNameDocument;
 import io.github.vadimbabich.entitymetamodel.runtime.r2dbc.fixtures.TrailingDotDocument;
 
+import io.github.vadimbabich.entitymetamodel.runtime.SqlExpr;
 import java.util.List;
 import java.util.Locale;
 
@@ -142,6 +147,156 @@ class QueryRendererTest {
             "WHERE (\"account\".\"account_id\" > $1)"
                 + " AND (NOT (\"account\".\"account_id\" IN ($2, $3)))");
     assertThat(statement.values()).containsExactly(0L, 7L, 8L);
+  }
+
+  @Test
+  void aHomogeneousRunOfFiveFoldsPairwiseAndBindsInOperandOrder() {
+    Condition fiveThresholds =
+        accountId().gt(1L)
+            .and(accountId().gt(2L))
+            .and(accountId().gt(3L))
+            .and(accountId().gt(4L))
+            .and(accountId().gt(5L));
+
+    RenderedStatement statement = renderer.render(FluentSelect.from(ACCOUNT).where(fiveThresholds));
+
+    assertThat(statement.sql())
+        .endsWith(
+            "WHERE (((\"account\".\"account_id\" > $1) AND (\"account\".\"account_id\" > $2))"
+                + " AND ((\"account\".\"account_id\" > $3) AND (\"account\".\"account_id\" > $4)))"
+                + " AND (\"account\".\"account_id\" > $5)");
+    assertThat(statement.values()).containsExactly(1L, 2L, 3L, 4L, 5L);
+  }
+
+  @Test
+  void aRightNestedRunRendersLikeItsLeftNestedForm() {
+    Condition leftNested = accountId().gt(1L).and(accountId().gt(2L)).and(accountId().gt(3L));
+    Condition rightNested = accountId().gt(1L).and(accountId().gt(2L).and(accountId().gt(3L)));
+
+    RenderedStatement leftStatement = renderer.render(FluentSelect.from(ACCOUNT).where(leftNested));
+    RenderedStatement rightStatement =
+        renderer.render(FluentSelect.from(ACCOUNT).where(rightNested));
+
+    assertThat(rightStatement.sql()).isEqualTo(leftStatement.sql());
+    assertThat(rightStatement.sql())
+        .endsWith(
+            "WHERE ((\"account\".\"account_id\" > $1) AND (\"account\".\"account_id\" > $2))"
+                + " AND (\"account\".\"account_id\" > $3)");
+    assertThat(rightStatement.values()).containsExactly(1L, 2L, 3L);
+  }
+
+  @Test
+  void anOperatorChangeEndsTheRunAndKeepsItsOwnGrouping() {
+    Condition eitherEmail =
+        ownerEmail().is("first@example.com").or(ownerEmail().is("second@example.com"));
+    Condition eitherEmailThenTwoThresholds =
+        eitherEmail.and(accountId().gt(1L)).and(accountId().gt(2L));
+
+    RenderedStatement statement =
+        renderer.render(FluentSelect.from(ACCOUNT).where(eitherEmailThenTwoThresholds));
+
+    assertThat(statement.sql())
+        .endsWith(
+            "WHERE (((\"account\".\"owner_email\" = $1) OR (\"account\".\"owner_email\" = $2))"
+                + " AND (\"account\".\"account_id\" > $3))"
+                + " AND (\"account\".\"account_id\" > $4)");
+    assertThat(statement.values())
+        .containsExactly("first@example.com", "second@example.com", 1L, 2L);
+  }
+
+  @Test
+  void aFlatChainOfAHundredThousandTermsRendersOnASmallStack() throws InterruptedException {
+    FluentSelect<Account> hundredThousandTerms =
+        FluentSelect.from(ACCOUNT).where(DeepConditions.flatAndOfTerms(100_000));
+
+    assertThat(renderedOnASmallStack(hundredThousandTerms)).isNull();
+  }
+
+  @Test
+  void aConditionNestedPastTheSupportedDepthIsRefusedNamingOnlyDepthAndLimit() {
+    Condition onePastTheLimit = DeepConditions.alternatingOfHeight(SUPPORTED_NESTING + 1);
+
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> renderer.render(FluentSelect.from(ACCOUNT).where(onePastTheLimit)))
+        .withMessageContaining(String.valueOf(SUPPORTED_NESTING + 1))
+        .withMessageContaining(String.valueOf(SUPPORTED_NESTING))
+        .withMessageNotContaining("account_id")
+        .withMessageNotContaining("accountId");
+  }
+
+  @Test
+  void aConditionNestedExactlyToTheSupportedDepthRenders() {
+    Condition atTheLimit = DeepConditions.alternatingOfHeight(SUPPORTED_NESTING);
+
+    assertThatNoException()
+        .isThrownBy(() -> renderer.render(FluentSelect.from(ACCOUNT).where(atTheLimit)));
+  }
+
+  @Test
+  void aThreeTermRunAtTheDeepestLeafCostsTwoLevelsNotOne() {
+    Condition threeTermRun = accountId().gt(1L).and(accountId().gt(2L)).and(accountId().gt(3L));
+    Condition atTheLimit = DeepConditions.alternatingOver(threeTermRun, SUPPORTED_NESTING - 2);
+    Condition onePastTheLimit = DeepConditions.alternatingOver(threeTermRun, SUPPORTED_NESTING - 1);
+
+    assertThatNoException()
+        .isThrownBy(() -> renderer.render(FluentSelect.from(ACCOUNT).where(atTheLimit)));
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> renderer.render(FluentSelect.from(ACCOUNT).where(onePastTheLimit)))
+        .withMessageContaining(String.valueOf(SUPPORTED_NESTING + 1));
+  }
+
+  @Test
+  void aWideFlatRunIsMeasuredByItsFoldHeightNotByItsLength() {
+    Condition tenThousandTerms = DeepConditions.flatAndOfTerms(10_000);
+
+    assertThatNoException()
+        .isThrownBy(() -> renderer.render(FluentSelect.from(ACCOUNT).where(tenThousandTerms)));
+  }
+
+  @Test
+  void eachNegationCountsAsOneLevelOfNesting() {
+    Condition negatedToTheLimit = DeepConditions.negatedTimes(SUPPORTED_NESTING);
+    Condition negatedOnceMore = DeepConditions.negatedTimes(SUPPORTED_NESTING + 1);
+
+    assertThatNoException()
+        .isThrownBy(() -> renderer.render(FluentSelect.from(ACCOUNT).where(negatedToTheLimit)));
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> renderer.render(FluentSelect.from(ACCOUNT).where(negatedOnceMore)));
+  }
+
+  @Test
+  void aJoinConditionNestedPastTheSupportedDepthIsRefusedTheSameWay() {
+    Condition onePastTheLimit = DeepConditions.alternatingOfHeight(SUPPORTED_NESTING + 1);
+    FluentSelect<Account> deepJoin =
+        FluentSelect.from(ACCOUNT).join(MEMBERSHIP).on(onePastTheLimit);
+
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> renderer.render(deepJoin))
+        .withMessageContaining(String.valueOf(SUPPORTED_NESTING));
+  }
+
+  @Test
+  void aRawFragmentCarryingDeepParenthesesIsNotMeasuredAndRendersOnASmallStack()
+      throws InterruptedException {
+    String deeplyParenthesised =
+        "(".repeat(100_000) + "owner_email = {0}" + ")".repeat(100_000);
+    FluentSelect<Account> rawDoor =
+        FluentSelect.from(ACCOUNT).where(SqlExpr.raw(deeplyParenthesised, "x@example.com"));
+
+    assertThat(renderedOnASmallStack(rawDoor)).isNull();
+  }
+
+  @Test
+  void theSupportedDepthRendersOnASmallStack() throws InterruptedException {
+    FluentSelect<Account> atTheLimit =
+        FluentSelect.from(ACCOUNT).where(DeepConditions.alternatingOfHeight(SUPPORTED_NESTING));
+
+    assertThat(renderedOnASmallStack(atTheLimit)).isNull();
+  }
+
+  private static Throwable renderedOnASmallStack(FluentSelect<Account> select)
+      throws InterruptedException {
+    return DeepConditions.renderOnSmallStack(0, select);
   }
 
   @Test

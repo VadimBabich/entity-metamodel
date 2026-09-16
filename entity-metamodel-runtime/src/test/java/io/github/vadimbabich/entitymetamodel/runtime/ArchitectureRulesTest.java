@@ -46,6 +46,9 @@ class ArchitectureRulesTest {
   private static final Set<String> OWN_PACKAGES =
       Set.of("io.github.vadimbabich.entitymetamodel.runtime");
 
+  private static final Set<String> ADMITTED_TIER_S_DEPENDENCIES =
+      Set.of("org.springframework.data.relational.core.sql.SqlIdentifier");
+
   private static final Set<String> BLOCKING_CALLS =
       Set.of("block", "blockFirst", "blockLast", "toIterable", "toStream");
 
@@ -98,6 +101,16 @@ class ArchitectureRulesTest {
         .orShould()
         .callMethodWhere(
             reactorCallNamed(Set.of("onErrorContinue"), "an error-swallowing continuation"))
+        .check(PRODUCTION_CLASSES);
+  }
+
+  @Test
+  void nothingReachesTierSBeyondTheSelectVocabulary() {
+    noClasses()
+        .should()
+        .dependOnClassesThat(unadmittedTierSType())
+        .orShould()
+        .callMethodWhere(statementFactoryOtherThanSelect())
         .check(PRODUCTION_CLASSES);
   }
 
@@ -263,6 +276,34 @@ class ArchitectureRulesTest {
     involvedTypes.addAll(codeUnit.getExceptionTypes());
 
     return involvedTypes;
+  }
+
+  private static DescribedPredicate<JavaClass> unadmittedTierSType() {
+    return new DescribedPredicate<>("are Tier-S types outside the admitted SELECT vocabulary") {
+      @Override
+      public boolean test(JavaClass type) {
+        JavaClass elementType = type.getBaseComponentType();
+        if (!isTierS(elementType)) {
+          return false;
+        }
+
+        return !ADMITTED_TIER_S_DEPENDENCIES.contains(elementType.getName());
+      }
+    };
+  }
+
+  private static DescribedPredicate<JavaMethodCall> statementFactoryOtherThanSelect() {
+    return new DescribedPredicate<>("a StatementBuilder factory other than select") {
+      @Override
+      public boolean test(JavaMethodCall call) {
+        String factoryOwner = call.getTargetOwner().getName();
+        if (!factoryOwner.equals("org.springframework.data.relational.core.sql.StatementBuilder")) {
+          return false;
+        }
+
+        return !call.getName().equals("select");
+      }
+    };
   }
 
   private static DescribedPredicate<JavaMethodCall> reactorCallNamed(
