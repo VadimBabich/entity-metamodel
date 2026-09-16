@@ -198,8 +198,23 @@ jobs:
           # maven-gpg-plugin's default passphraseEnvName — no custom plumbing.
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
+      # Never committed or pushed; the edited tree dies with the runner. Consequence: a checkout of
+      # the tag still reads 2.0.0-SNAPSHOT, so reproducing a release from its tag means passing
+      # -DnewVersion=<the tag name without the v>.
+      #
+      # versions:set also rewrites project.build.outputTimestamp to the wall clock in every POM it
+      # changes (its default policy, onchange). That erased the commit-time stamp on the first RC1
+      # dry run, so this step runs BEFORE the stamp and pins the policy to never: either alone
+      # would do, and neither is allowed to be the only thing protecting the stamp.
+      - name: Set the family version ephemerally
+        run: |
+          ./mvnw -B -q versions:set \
+            -DnewVersion="$VERSION" -DgenerateBackupPoms=false \
+            -DupdateBuildOutputTimestampPolicy=never
+
       # HEAD's commit time, not "now", so a re-run on the same commit stays byte-identical.
-      # Stamped into the POMs so the published POM carries it, not just this build.
+      # Stamped into the POMs so the published POM carries it, not just this build. Last of the
+      # POM edits on purpose: the grep below guards the POM the build will actually read.
       - name: Stamp the reproducible-build timestamp
         run: |
           STAMP="$(TZ=UTC0 git log -1 --date=iso-strict-local --format=%cd "$GITHUB_SHA")"
@@ -211,18 +226,11 @@ jobs:
 
           if ! grep -q "<project.build.outputTimestamp>$STAMP<" pom.xml; then
             echo "::error::The timestamp did not land in pom.xml, so the published POMs would"\
-                 "carry the committed placeholder and the build would not be reproducible from"\
-                 "this commit. Check whether the property was renamed or moved."
+                 "carry the committed placeholder or a wall-clock time and the build would not be"\
+                 "reproducible from this commit. Check whether the property was renamed, moved, or"\
+                 "rewritten by a later step."
             exit 1
           fi
-
-      # Never committed or pushed; the edited tree dies with the runner. Consequence: a checkout of
-      # the tag still reads 2.0.0-SNAPSHOT, so reproducing a release from its tag means passing
-      # -DnewVersion=<the tag name without the v>.
-      - name: Set the family version ephemerally
-        run: |
-          ./mvnw -B -q versions:set \
-            -DnewVersion="$VERSION" -DgenerateBackupPoms=false
 
       # The whole reactor deploys: it is one version line and the BOM promises every module in it,
       # so publishing a subset would advertise coordinates that do not exist. `deploy` runs
@@ -341,7 +349,6 @@ jobs:
 
           printf '%s\n' "$collected"
 
-          # A read-only call through the same GH_TOKEN and GH_REPO the publish job uses.
           release_count="$(gh api "repos/$GH_REPO/releases" --jq 'length')"
           echo "handoff intact; the releases API answered with $release_count existing release(s)"
 
