@@ -2,8 +2,14 @@
 
 ## Unreleased
 
-The `entity-metamodel` family — `core`, `runtime`, `runtime-r2dbc`, `processor` and a BOM — is built
-in this repository and **not published**. It holds the model vocabulary, the reference types
+Nothing yet.
+
+## 2.0.0-RC1 — 2026-09-16
+
+The `entity-metamodel` family — `core`, `runtime`, `runtime-r2dbc`, `processor` and a BOM — is
+**published as `2.0.0-RC1` on Maven Central**, the family's first publication and a release candidate:
+the API is frozen, and from this version the compatibility gate compares every build against a released
+baseline. It holds the model vocabulary, the reference types
 (`EntityRef`, `PropertyRef`, `JoinRef`) that generated code compiles against, the owned `@Generated`
 and `@RawSql` markers, and the annotation processor that generates metamodels. The supported
 substrate is `spring-data-relational` / `spring-data-r2dbc` 4.0.x–4.1.x, the lines still in OSS
@@ -266,8 +272,10 @@ the source, and the second needs callbacks resolved from an application context,
 neither registers nor holds. Logic that has to run after an entity is read belongs in the mapper the
 executor takes.
 
-Nothing is on Maven Central yet. The first publication there will be the version that generates
-*and* executes, rather than a milestone of parts — see [`ROADMAP.md`](ROADMAP.md).
+`2.0.0-RC1` is the first publication, and it is the whole thing — a version that generates *and*
+executes, rather than a milestone of parts. Each release is signed, carries a CycloneDX SBOM, attests
+its build provenance, and rebuilds byte-for-byte from its tag on the release toolchain (Linux, Temurin
+21, Maven 3.9.16). What stands between this candidate and `2.0.0` is in [`ROADMAP.md`](ROADMAP.md).
 
 **The 1.x Maven plugin is retired and removed.** `jpa-metadata-maven-plugin` was deprecated, then
 deleted from the repository along with its golden corpus, its integration test and its dependabot

@@ -3,10 +3,10 @@
 Compile-time metamodels for Spring Data R2DBC entities, and typed queries — joins included — that
 the compiler checks against them.
 
-> **Not on Maven Central yet.** You build it from source. Everything below runs today and is held
-> by tests on every build; the public API froze on 2026-09-06, and the compatibility promise
-> starts with the first published version. [Where it's going](#where-its-going) has the bar for
-> that release.
+> **`2.0.0-RC1` is on Maven Central.** It is a release candidate: the public API froze on 2026-09-06,
+> and from this version the compatibility gate compares every build against a released baseline. A
+> break before `2.0.0` can only enter through a justified ledger entry, and would be in the CHANGELOG.
+> [Where it's going](#where-its-going) has what stands between the candidate and `2.0.0`.
 
 ## Why this exists
 
@@ -60,14 +60,14 @@ rest follows from that choice.
 ## Five minutes
 
 The processor goes on the annotation-processor path and never reaches your runtime classpath. The
-runtime goes on the compile path, because generated code imports it. Nothing is on Maven Central,
-so [install both into your local repository first](#requirements-and-installation).
+runtime goes on the compile path, because generated code imports it. Both resolve from Maven
+Central.
 
 ```xml
 <dependency>
   <groupId>io.github.vadimbabich</groupId>
   <artifactId>entity-metamodel-runtime-r2dbc</artifactId>
-  <version>2.0.0-SNAPSHOT</version>
+  <version>2.0.0-RC1</version>
 </dependency>
 ```
 
@@ -80,7 +80,7 @@ so [install both into your local repository first](#requirements-and-installatio
       <path>
         <groupId>io.github.vadimbabich</groupId>
         <artifactId>entity-metamodel-processor</artifactId>
-        <version>2.0.0-SNAPSHOT</version>
+        <version>2.0.0-RC1</version>
       </path>
     </annotationProcessorPaths>
   </configuration>
@@ -311,10 +311,11 @@ pagination among them.
   module leaves the consuming module up to date, so its metamodels are not rewritten. The bound is
   that columns resolve at use: a renamed property throws from `PropertyRef.columnName` rather than
   querying the wrong column.
-- **Frozen, not yet released.** The public signatures of `core`, `runtime` and `runtime-r2dbc`
-  froze on 2026-09-06 and every build runs a compatibility gate over them: Revapi, plus architecture
-  tests pinning the exact foreign types a public signature may carry. The consumer-facing promise
-  starts with the first published version.
+- **A release candidate, not GA.** The public signatures of `core`, `runtime` and `runtime-r2dbc`
+  froze on 2026-09-06, and every build runs a compatibility gate over them against `2.0.0-RC1`:
+  Revapi, plus architecture tests pinning the exact foreign types a public signature may carry. A
+  break before `2.0.0` is possible only through a justified ledger entry, recorded in the CHANGELOG;
+  fixes ship as the next candidate or as `2.0.0`, never as a patched RC1.
 
 ## Requirements and installation
 
@@ -325,38 +326,41 @@ pagination among them.
   3.5.x line have to upgrade first.
 - **Any build that runs javac.** There is no build-tool plugin to install.
 
-Nothing is on Maven Central, so install the family into your local repository first:
-
-```bash
-git clone https://github.com/VadimBabich/entity-metamodel.git
-cd entity-metamodel
-./mvnw -B install
-```
-
-`./mvnw -B verify` additionally runs the integration suite, which executes its statements against
-PostgreSQL in Testcontainers and is skipped when Docker is unavailable locally, never in CI.
+Everything resolves from Maven Central. Building from source is for contributors:
+`./mvnw -B verify` runs the unit tests and the integration suite, which executes its statements
+against PostgreSQL in Testcontainers and is skipped when Docker is unavailable locally, never in CI.
 
 ### Maven
 
 The two blocks at the top of [Five minutes](#five-minutes): the runtime as a dependency, the
-processor under `annotationProcessorPaths`.
+processor under `annotationProcessorPaths`. To hold the family on one version, import the BOM and
+drop the version from the runtime dependency; the processor path keeps its explicit version here.
+
+```xml
+<dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>io.github.vadimbabich</groupId>
+      <artifactId>entity-metamodel-bom</artifactId>
+      <version>2.0.0-RC1</version>
+      <type>pom</type>
+      <scope>import</scope>
+    </dependency>
+  </dependencies>
+</dependencyManagement>
+```
 
 ### Gradle
 
 ```kotlin
-repositories {
-  mavenLocal()
-  mavenCentral()
-}
-
 dependencies {
-  implementation("io.github.vadimbabich:entity-metamodel-runtime-r2dbc:2.0.0-SNAPSHOT")
-  annotationProcessor("io.github.vadimbabich:entity-metamodel-processor:2.0.0-SNAPSHOT")
+  implementation("io.github.vadimbabich:entity-metamodel-runtime-r2dbc:2.0.0-RC1")
+  annotationProcessor("io.github.vadimbabich:entity-metamodel-processor:2.0.0-RC1")
 }
 ```
 
 For the metamodel and its typed references without query execution, depend on
-`entity-metamodel-runtime` instead. `entity-metamodel-bom` aligns the whole family on one version.
+`entity-metamodel-runtime` instead.
 
 ## IDE
 
@@ -384,14 +388,17 @@ delegated Maven or Gradle build is the reliable path today.
 
 ## Where it's going
 
-Nothing goes to Maven Central until it is whole. Central is permanent, so the first release will be
-a version that runs end to end — generate a metamodel, build a query, execute it — rather than a
-milestone of parts. The API froze on 2026-09-06 behind a gate that runs in every build; what is
-left is packaging, and the next step is a release candidate cut from `master` by a dispatch-only
-workflow. When it ships, each release is signed, carries a CycloneDX SBOM and attests its build
-provenance, so a jar from Central can be checked against the exact workflow run and commit that
-built it: `gh attestation verify <jar> --repo VadimBabich/entity-metamodel`.
-[`ROADMAP.md`](ROADMAP.md) has the order and what gates it.
+`2.0.0-RC1` is the first release, and it went out whole — a version that generates a metamodel,
+builds a query and executes it, because Central is permanent and a milestone of parts would have
+been permanent too. What stands between the candidate and `2.0.0` is a soak: the first
+compatibility-gate run against a published baseline, reviewed rather than assumed, and the
+marker-contract raises entering the API ledger. [`ROADMAP.md`](ROADMAP.md) has the order.
+
+Each release is signed, carries a CycloneDX SBOM and attests its build provenance, so a jar from
+Central can be checked against the exact workflow run and commit that built it:
+`gh attestation verify <jar> --repo VadimBabich/entity-metamodel`. It also rebuilds byte-for-byte
+from its tag on the release toolchain — Linux, Temurin 21, Maven 3.9.16 — with the version and the
+commit-time `project.build.outputTimestamp` the published parent POM records.
 
 The 1.x Maven plugin that preceded this one was retired and removed from the repository on
 2026-08-30; it survives in git history and in its own tags.

@@ -1,11 +1,13 @@
 # Roadmap
 
-As of 2026-09-13. Updated when direction changes, reviewed at least once per release cycle.
+As of 2026-09-16. Updated when direction changes, reviewed at least once per release cycle.
 
 ## Where the project is
 
-Nothing is shipping. The 2.x family — annotation processor, runtime library, query runtime and a
-BOM — is built and unpublished. The 1.x Maven plugin that preceded it, which parsed entity sources
+**`2.0.0-RC1` is on Maven Central** — the first publication of the 2.x family: annotation processor,
+runtime library, query runtime and a BOM, released together under one version. It is a release
+candidate: the API is frozen, and the compatibility gate now compares every build against it. The
+1.x Maven plugin that preceded it, which parsed entity sources
 with JavaParser, was retired and **removed from the repository on 2026-08-30**; it survives in git
 history and in its own tags.
 
@@ -17,16 +19,15 @@ what stands between here and a first release is packaging and release work, not 
 
 - **Runtime library** — typed references (`EntityRef` / `PropertyRef` / `JoinRef`) that generated
   metamodels compile against. No Spring SQL type appears in any public signature, and the few
-  admitted framework types are pinned by an architecture test. *Built, frozen.*
+  admitted framework types are pinned by an architecture test. *Released in `2.0.0-RC1`.*
 - **Annotation processor** — build-tool-neutral generation (Maven, Gradle, IDE builds),
-  incremental-compilation aware. *Built, generating the frozen shape.*
+  incremental-compilation aware. *Released in `2.0.0-RC1`; generates the frozen shape.*
 - **Fluent query surface** — typed, composable `SELECT` construction over Spring Data R2DBC,
   including joins, driven by the generated metamodel. Paging covers `Page`, the count-free `Slice`
   and a streaming window; keyset (cursor) scrolling is deliberately not built, and the README's
-  query recipes carry the answer that serves it meanwhile. *Built
-  (`entity-metamodel-runtime-r2dbc`), frozen, executing against a real PostgreSQL in its
-  integration suite.*
-- **BOM** — one aligned version for the whole family. *Built.*
+  query recipes carry the answer that serves it meanwhile. *Released in `2.0.0-RC1`
+  (`entity-metamodel-runtime-r2dbc`); executes against a real PostgreSQL in its integration suite.*
+- **BOM** — one aligned version for the whole family. *Released in `2.0.0-RC1`.*
 
 A relationship-annotation module (`@References`) is deliberately post-2.0.0: the aligned version
 policy makes a new artifact and its BOM row an additive minor, so it waits for usage evidence
@@ -43,9 +44,11 @@ binding layer would add, and the budget is the half a caller with no web layer i
 most. That half is warranted by the doors that ship
 today, so it is not gated on demand the way the module is.
 
-Nothing is on Maven Central yet, deliberately: the first release there will be a version that runs
-end to end — generate a metamodel, build a query, execute it — not a milestone of parts nobody can
-use. The 1.x plugin has been removed. It emitted into Spring's own packages, which is the defect 2.x
+**What stands between `2.0.0-RC1` and `2.0.0`:** a soak on the candidate; the first compatibility-gate
+run against a published baseline, reviewed rather than assumed; the marker-contract raises entering
+the API ledger; and the post-release checklist. The candidate was published whole — it generates a
+metamodel, builds a query and executes it — because Central is permanent and a milestone of parts
+nobody can use would have been permanent too. The 1.x plugin has been removed. It emitted into Spring's own packages, which is the defect 2.x
 exists to remove; the surviving shape is pinned by a committed corpus of golden files so it cannot
 drift.
 

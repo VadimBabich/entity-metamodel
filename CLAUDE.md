@@ -61,12 +61,14 @@ correct side, and keep committed files free of references to the private side.
   not general advice.
 - `CLAUDE.local.md` (uncommitted) — where the private records live and what they decide.
 
-## Current state (2026-09-06)
+## Current state (2026-09-16)
 
 - The 1.x JavaParser Mojo was retired and **removed from the repository on 2026-08-30** under an
   approving decision record named in that commit's message. It survives in git history and in the
-  `1.0.0` and `v1.1.0` tags only. Nothing is shipping: the v2 family is built and unpublished.
-- All five v2 modules exist at `2.0.0-SNAPSHOT` and build green in the reactor:
+  `1.0.0` and `v1.1.0` tags only. **The v2 family is published as `2.0.0-RC1` on Maven Central** — the
+  first publication, a release candidate; GA is `2.0.0`.
+- All five v2 modules build green in the reactor and stay at `2.0.0-SNAPSHOT` in the tree — the
+  release workflow sets versions ephemerally, so no commit ever carries a release version:
   `entity-metamodel-core`, `entity-metamodel-runtime`, `entity-metamodel-processor`,
   `entity-metamodel-runtime-r2dbc` and the `entity-metamodel-bom`. The processor generates the
   frozen shape; the r2dbc module carries the fluent query surface and executes it against a real
@@ -77,24 +79,24 @@ correct side, and keep committed files free of references to the private side.
   floor was superseded — its scope was the removed 1.x line — so the enforcer's `[3.9,)` build
   floor stays and must not be lowered.
 - **The API froze on 2026-09-06.** Public signatures in `core`, `runtime` and `runtime-r2dbc` are
-  gated: Revapi runs inside `verify` in those three modules (against an empty baseline until the
-  first publication, after which it arms against the released version — never flip the
-  unresolved-artifact switches to true before that), and the two runtime modules'
+  gated: Revapi runs inside `verify` in those three modules against the latest released version —
+  `2.0.0-RC1`, which `RELEASE` resolves; the unresolved-artifact switches stay false until the first
+  armed gate run has been reviewed, a scheduled decision — and the two runtime modules'
   `ArchitectureRulesTest` pin the exact foreign types a public signature may carry (core admits
   none — its Revapi raise alone is the pin). An intentional break needs a
   justified `revapi.differences` entry in the module's POM — that ledger is the deprecation
   record — and a new overload needs a by-hand check that no previously legal call becomes
   ambiguous, which no tool supplies.
-- Publication is gated: nothing in the family has been released, and the release workflow
-  refuses by design (see below).
+- GA is gated on the candidate's soak. The release workflow is dispatch-only from `master` and stops
+  at VALIDATED until the Portal decision (see below).
 
 ## Branching and releases
 
 - Work on `master` through short-lived `feature/YYYY.MM_short-desc` branches. Commit or push
   only when asked.
 - **No long-lived `2.x` or `develop` branch.** There is one line to release. The `2.0.0-M1`
-  milestone was cancelled on 2026-08-22, so the first published version is `2.0.0-RC1` or `2.0.0`
-  directly, cut from `master`.
+  milestone was cancelled on 2026-08-22, so the first published version was `2.0.0-RC1`, cut from
+  `master`; `2.0.0` follows the same path.
 - `release/2.0.x` branches on demand only, cut from a tag, then deleted.
 - Releases are dispatch-triggered (`.github/workflows/release.yml`); milestones and RCs take the
   same path. Tag as `v<version>`, matching `v1.1.0` — the unprefixed `1.0.0` is a known

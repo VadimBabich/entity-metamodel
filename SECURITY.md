@@ -16,7 +16,8 @@ Honest status, so expectations are right:
 |---|---|
 | 1.0.0 | Abandoned — do not use; it will not receive fixes. |
 | 1.x | Retired and removed from the repository. No fixes. |
-| 2.0.0 (planned) | Built, not released. Fixes will land here once it ships. |
+| 2.0.0-RC1 | Release candidate on Maven Central. Fixes land in the next candidate or in 2.0.0, not as a patched RC1. |
+| 2.0.0 | Planned; follows the candidate's soak. |
 
 ## Scope notes
 
