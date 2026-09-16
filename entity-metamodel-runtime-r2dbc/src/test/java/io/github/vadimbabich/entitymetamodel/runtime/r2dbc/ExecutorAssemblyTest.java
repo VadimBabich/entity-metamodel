@@ -117,6 +117,36 @@ class ExecutorAssemblyTest {
   }
 
   @Test
+  void everyTerminalRefusesAConditionNestedPastTheSupportedDepthInItsDocumentedShape() {
+    FluentSelect<Account> tooDeep =
+        FluentSelect.from(ACCOUNT)
+            .where(DeepConditions.alternatingOfHeight(DeepConditions.SUPPORTED_NESTING + 1));
+
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> executor.all(tooDeep));
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> executor.one(tooDeep));
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> executor.first(tooDeep));
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> executor.list(tooDeep));
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> executor.count(tooDeep));
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> executor.exists(tooDeep));
+
+    StepVerifier.create(executor.page(tooDeep, PageRequest.of(0, 10)))
+        .expectError(IllegalArgumentException.class)
+        .verify();
+    StepVerifier.create(executor.slice(tooDeep, PageRequest.of(0, 10)))
+        .expectError(IllegalArgumentException.class)
+        .verify();
+    StepVerifier.create(executor.all(tooDeep, PageRequest.of(0, 10)))
+        .expectError(IllegalArgumentException.class)
+        .verify();
+  }
+
+  @Test
   void pageReportsTheSameRefusalThroughThePublisherRatherThanByThrowing() {
     // The same description throws from all() and signals from page().
     FluentSelect<Person> people = FluentSelect.from(PERSON);

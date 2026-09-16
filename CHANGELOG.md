@@ -78,6 +78,38 @@ references name properties rather than columns: a column name can be another pro
 resolving one as the other would filter the wrong column with nothing to notice. A criteria that
 names a column is refused, and the refusal names the property to use instead.
 
+**What the runtime bounds, and what it deliberately leaves to the caller.** A condition tree nested
+past 32 rendered levels is refused with an `IllegalArgumentException` that names the measured depth
+and the limit and nothing else — from a `where`, from a join's `ON`, and from a `Criteria`, which
+is measured after it is adapted, so same-operator groups that flatten into one run cost only their
+fold height. `CriteriaAdapter` bounds its own group recursion separately, at 64 nested groups, with a
+refusal that names groups rather than depth. The refusal has the shape every other
+structural refusal already has: the terminals that render when called throw, and `page`, `slice` and
+the windowed `all` deliver it on the publisher. The limit counts nesting, not length: a homogeneous
+`and`/`or` run of *n* terms costs ⌈log₂ *n*⌉ levels, so the largest statement PostgreSQL accepts at all
+measures 16, and a flat filter of a hundred thousand terms renders on a 256 KB stack. Behind that sits a
+rendering change: a homogeneous run of **three or more** terms is now grouped as a balanced tree rather
+than a left-leaning chain, so the emitted SQL for such runs changes while rows do not — the
+integration suite holds them equal to Spring's own template on PostgreSQL 16. Execution plans are
+expected to be unaffected as well, since PostgreSQL and MySQL both flatten same-operator boolean chains
+before planning; the suite does not assert plans, and it runs against no other engine. What does change is statement identity: `pg_stat_statements.queryid` and MySQL's statement
+digest are computed before that normalisation, so monitoring keyed on them shows new entries for the
+reshaped statements — the same discontinuity a PostgreSQL major upgrade produces. The emitted SQL text
+is therefore not part of the compatibility contract; `RenderedStatement.sql()`, `preview()` and
+`previewWithValues()` are for inspection and logging, not a stable string. A raw `SqlExpr` fragment is
+not measured, because it is not parsed here: whatever nesting its text carries is bounded by the
+server's parser and reported as a syntax error with the connection intact. The library caps no `IN`
+list and no page size; an `IN` list past the driver's parameter ceiling fails as a reported driver
+error, not silently — observed on PostgreSQL, whose ceiling is 65 535 binds; MySQL documents the same
+ceiling and SQL Server 2 100, and the same shape of failure is expected there, unverified here. The two doors that take
+text — a `Criteria` and a `Pageable` sort — resolve **any** persisted property of the entity, so an
+application forwarding a filter or sort term it did not build is the component deciding what may be
+filtered and sorted on; an allow-list is the application's to add. `@RawSql` is now `RUNTIME`-retained
+as its record specifies, and tests pin both markers' retention and the marker's presence on the three
+raw doors. An architecture rule holds the runtime's use of Spring's SQL builder to an admitted
+SELECT vocabulary and to `StatementBuilder.select` alone, so a reference to any data-modifying
+statement — `insert`, `update`, `delete` or `upsert` — fails the build.
+
 One thing to know before joining: a join to a to-many side multiplies rows, so the selected entity
 comes back once per matching counterpart — a list carries duplicates and a page's total counts those
 rows rather than entities. `distinct()` collapses that back to distinct projected rows, and the

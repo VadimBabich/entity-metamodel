@@ -34,6 +34,8 @@ public final class CriteriaAdapter {
   // compiles warnings as errors.
   private static final String WRAPPED_VALUE_TYPE = "org.springframework.r2dbc.core.Parameter";
 
+  static final int MAX_GROUP_NESTING = 64;
+
   private final PropertyNameResolver propertyNames;
 
   /**
@@ -54,19 +56,19 @@ public final class CriteriaAdapter {
     Objects.requireNonNull(criteria, "criteria");
     Objects.requireNonNull(instance, "instance");
 
-    return conditionOf(criteria, instance);
+    return conditionOf(criteria, instance, 0);
   }
 
   // A chain is a flat sequence under SQL precedence, not a left-associated tree: the substrate
   // emits it unbracketed, so `a OR b AND c` executes as `a OR (b AND c)`. An OR therefore opens a
   // new run, anything else extends the current one, and the runs are OR-ed at the end.
   private <E> Optional<Condition> conditionOf(
-      CriteriaDefinition criteria, EntityRef<E> instance) {
+      CriteriaDefinition criteria, EntityRef<E> instance, int depth) {
 
     List<Condition> runs = new ArrayList<>();
 
     for (CriteriaDefinition link : forwardChain(criteria)) {
-      Optional<Condition> term = ownConditionOf(link, instance);
+      Optional<Condition> term = ownConditionOf(link, instance, depth);
 
       if (term.isEmpty()) {
         continue;
@@ -129,10 +131,13 @@ public final class CriteriaAdapter {
   }
 
   private <E> Optional<Condition> ownConditionOf(
-      CriteriaDefinition criteria, EntityRef<E> instance) {
+      CriteriaDefinition criteria, EntityRef<E> instance, int depth) {
 
     if (criteria.isGroup()) {
-      return groupConditionOf(criteria.getGroup(), criteria.getCombinator(), instance);
+      int groupNesting = depth + 1;
+      requireWithinGroupNesting(groupNesting);
+
+      return groupConditionOf(criteria.getGroup(), criteria.getCombinator(), instance, groupNesting);
     }
     if (criteria.isEmpty()) {
       return Optional.empty();
@@ -145,12 +150,12 @@ public final class CriteriaAdapter {
   // instead turns `from(scope, search)` into `scope OR search`, and the scope stops constraining.
   private <E> Optional<Condition> groupConditionOf(
       List<CriteriaDefinition> group, CriteriaDefinition.Combinator combinator,
-      EntityRef<E> instance) {
+      EntityRef<E> instance, int depth) {
 
     Optional<Condition> combined = Optional.empty();
 
     for (CriteriaDefinition member : group) {
-      Optional<Condition> memberCondition = conditionOf(member, instance);
+      Optional<Condition> memberCondition = conditionOf(member, instance, depth);
 
       if (memberCondition.isEmpty()) {
         continue;
@@ -164,6 +169,16 @@ public final class CriteriaAdapter {
     }
 
     return combined;
+  }
+
+  private static void requireWithinGroupNesting(int groupNesting) {
+    if (groupNesting <= MAX_GROUP_NESTING) {
+      return;
+    }
+
+    throw new IllegalArgumentException(
+        "Criteria group nesting " + groupNesting + " exceeds the supported maximum of "
+            + MAX_GROUP_NESTING);
   }
 
   private <E> Condition comparisonOf(CriteriaDefinition criteria, EntityRef<E> instance) {

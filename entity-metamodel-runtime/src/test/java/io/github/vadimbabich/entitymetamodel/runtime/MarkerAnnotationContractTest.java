@@ -6,11 +6,11 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.lang.reflect.Method;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins the retention and targets the marker ADRs argue for. Neither marker has an in-repo
- * application yet, so nothing else would notice a switch to SOURCE retention.
+ * Pins the retention and targets the marker ADRs argue for.
  */
 class MarkerAnnotationContractTest {
 
@@ -31,11 +31,22 @@ class MarkerAnnotationContractTest {
   }
 
   @Test
-  void rawSqlIsClassRetainedAndMarksMethodsAndTypes() {
+  void rawSqlIsRuntimeRetainedAndMarksMethodsAndTypes() {
     Retention retention = RawSql.class.getAnnotation(Retention.class);
     Target target = RawSql.class.getAnnotation(Target.class);
 
-    assertThat(retention.value()).isEqualTo(RetentionPolicy.CLASS);
+    assertThat(retention.value()).isEqualTo(RetentionPolicy.RUNTIME);
     assertThat(target.value()).containsExactlyInAnyOrder(ElementType.METHOD, ElementType.TYPE);
+  }
+
+  @Test
+  void everyRawDoorCarriesTheMarker() throws NoSuchMethodException {
+    Method rawFragment = SqlExpr.class.getMethod("raw", String.class, Object[].class);
+    Method ascendingByExpression = ExpressionSort.class.getMethod("asc", SqlExpr.class);
+    Method descendingByExpression = ExpressionSort.class.getMethod("desc", SqlExpr.class);
+
+    assertThat(rawFragment.isAnnotationPresent(RawSql.class)).isTrue();
+    assertThat(ascendingByExpression.isAnnotationPresent(RawSql.class)).isTrue();
+    assertThat(descendingByExpression.isAnnotationPresent(RawSql.class)).isTrue();
   }
 }

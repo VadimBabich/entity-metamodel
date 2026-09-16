@@ -87,3 +87,11 @@ What the library cannot check here, and you must:
   express, so that one needs the expanded form — at the cost measured above.
 - **Not over a to-many join,** where one root id no longer identifies one row. Add `distinct()` and
   the joined instance's id to the key, or key on a description that does not join.
+
+**What fails at the server rather than here.** An `IN` list past the driver's parameter ceiling fails as a
+reported driver error with the connection intact, not silently — observed on PostgreSQL at its ceiling
+of 65 535 binds; MySQL documents the same ceiling and SQL Server 2 100, where the same failure shape is
+expected but not exercised by this repository's suite. The library caps no list. A raw `SqlExpr` fragment whose text
+exceeds what the server's parser accepts fails the same way, as a reported syntax error with the
+connection intact; the library's depth limit does not apply to fragment text, because the fragment is
+not parsed here.

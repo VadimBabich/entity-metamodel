@@ -1,6 +1,6 @@
 # Roadmap
 
-As of 2026-09-06. Updated when direction changes, reviewed at least once per release cycle.
+As of 2026-09-13. Updated when direction changes, reviewed at least once per release cycle.
 
 ## Where the project is
 
@@ -31,6 +31,17 @@ what stands between here and a first release is packaging and release work, not 
 A relationship-annotation module (`@References`) is deliberately post-2.0.0: the aligned version
 policy makes a new artifact and its BOM row an additive minor, so it waits for usage evidence
 rather than holding the release.
+
+**Binding external names** — accepting filter and sort terms that arrive as text, from a web
+request or from a machine caller — is post-2.0.0 and waits on the same evidence. Two facts belong
+beside that decision rather than behind it. The doors that already take text resolve *any*
+persisted property of the entity, so an application forwarding a filter or a sort term it did not
+build is the thing deciding what may be filtered and sorted on; the library does not narrow it.
+And the library bounds no request's cost — it caps no `IN` list and no page size; it refuses
+only a condition nested past what it could render at all. An allow-list and a budget are what a
+binding layer would add, and the budget is the half a caller with no web layer in front of it needs
+most. That half is warranted by the doors that ship
+today, so it is not gated on demand the way the module is.
 
 Nothing is on Maven Central yet, deliberately: the first release there will be a version that runs
 end to end — generate a metamodel, build a query, execute it — not a milestone of parts nobody can

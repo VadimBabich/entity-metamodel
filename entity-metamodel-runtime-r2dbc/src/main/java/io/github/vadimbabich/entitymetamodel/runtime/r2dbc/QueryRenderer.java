@@ -14,7 +14,9 @@ import io.github.vadimbabich.entitymetamodel.runtime.PropertySort;
 import io.github.vadimbabich.entitymetamodel.runtime.SortOrder;
 import io.github.vadimbabich.entitymetamodel.runtime.SqlExpr;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -67,6 +69,8 @@ public final class QueryRenderer {
   // template grammar into public API, and would guard the pattern's text without guarding how each
   // side reads a match. The in-step matrix test guards that.
   private static final Pattern ARGUMENT_REFERENCE = Pattern.compile("\\{([0-9]+)}");
+
+  static final int MAX_CONDITION_DEPTH = 32;
 
   public QueryRenderer(RelationalMappingContext mappingContext, R2dbcDialect dialect) {
     Objects.requireNonNull(dialect, "dialect");
@@ -383,6 +387,12 @@ public final class QueryRenderer {
   private org.springframework.data.relational.core.sql.Condition translate(
       Condition condition, RenderPass pass) {
 
+    return translate(condition, pass, 0);
+  }
+
+  private org.springframework.data.relational.core.sql.Condition translate(
+      Condition condition, RenderPass pass, int depth) {
+
     if (condition instanceof Comparison comparison) {
       return translateComparison(comparison, pass);
     }
@@ -397,11 +407,13 @@ public final class QueryRenderer {
       return Conditions.isNull(columnFor(nullCheck.property(), pass));
     }
     if (condition instanceof Junction junction) {
-      return translateJunction(junction, pass);
+      return translateJunction(junction, pass, depth);
     }
     if (condition instanceof Negation negation) {
-      return translateNegation(negation, pass);
+      return translateNegation(negation, pass, depth);
     }
+    // A fragment is a leaf and costs no depth on purpose: its text is never parsed here, and whatever
+    // nesting it carries is bounded and reported by the server's parser, not by this guard.
     if (condition instanceof SqlExpr rawFragment) {
       return translateRawFragment(rawFragment, pass);
     }
@@ -437,28 +449,125 @@ public final class QueryRenderer {
   }
 
   private org.springframework.data.relational.core.sql.Condition translateJunction(
-      Junction junction, RenderPass pass) {
+      Junction junction, RenderPass pass, int depth) {
 
-    // Both operands, always. Un-grouped, AND-over-OR precedence lets an OR operand escape its
-    // junction and widen the match silently. Do not "simplify" to nesting only the OR side: which
-    // side needs grouping depends on the parent, which a recursive translation cannot see.
-    org.springframework.data.relational.core.sql.Condition left =
-        Conditions.nest(translate(junction.left(), pass));
-    org.springframework.data.relational.core.sql.Condition right =
-        Conditions.nest(translate(junction.right(), pass));
+    List<Condition> operands = homogeneousRunOf(junction);
+    int operandDepth = depth + foldLevelsOf(operands.size());
+    requireWithinDepth(operandDepth);
 
-    return switch (junction.operator()) {
-      case AND -> left.and(right);
-      case OR -> left.or(right);
+    List<org.springframework.data.relational.core.sql.Condition> translatedOperands =
+        new ArrayList<>();
+    for (Condition operand : operands) {
+      translatedOperands.add(translate(operand, pass, operandDepth));
+    }
+
+    return foldPairwise(junction.operator(), translatedOperands);
+  }
+
+  private static List<Condition> homogeneousRunOf(Junction root) {
+    List<Condition> operands = new ArrayList<>();
+    Deque<Condition> pending = new ArrayDeque<>();
+    pending.push(root);
+
+    while (!pending.isEmpty()) {
+      Condition next = pending.pop();
+
+      if (next instanceof Junction nested && nested.operator() == root.operator()) {
+        // Right first so left pops first: operand order is bind order, and a LIFO deque reverses it.
+        pending.push(nested.right());
+        pending.push(nested.left());
+        continue;
+      }
+
+      operands.add(next);
+    }
+
+    return operands;
+  }
+
+  private static int foldLevelsOf(int operandCount) {
+    int levels = 0;
+
+    for (int width = operandCount; width > 1; width = widthAfterPairing(width)) {
+      levels++;
+    }
+
+    return levels;
+  }
+
+  private static int widthAfterPairing(int width) {
+    int pairs = width / 2;
+
+    if (hasUnpairedTail(width)) {
+      return pairs + 1;
+    }
+
+    return pairs;
+  }
+
+  private static boolean hasUnpairedTail(int width) {
+    return width % 2 == 1;
+  }
+
+  static void requireWithinDepth(int depth) {
+    if (depth <= MAX_CONDITION_DEPTH) {
+      return;
+    }
+
+    throw new IllegalArgumentException(
+        "Condition nesting depth " + depth + " exceeds the supported maximum of "
+            + MAX_CONDITION_DEPTH);
+  }
+
+  // Only the emitted text depends on the grouping; rows and plans do not. The shape is RFC 9162's
+  // Merkle split, and its height is what the depth guard charges, so foldLevelsOf must follow it.
+  private static org.springframework.data.relational.core.sql.Condition foldPairwise(
+      Junction.Operator operator,
+      List<org.springframework.data.relational.core.sql.Condition> operands) {
+
+    List<org.springframework.data.relational.core.sql.Condition> level = operands;
+    while (level.size() > 1) {
+      List<org.springframework.data.relational.core.sql.Condition> nextLevel = new ArrayList<>();
+
+      for (int index = 0; index + 1 < level.size(); index += 2) {
+        nextLevel.add(combine(operator, level.get(index), level.get(index + 1)));
+      }
+      if (hasUnpairedTail(level.size())) {
+        nextLevel.add(level.get(level.size() - 1));
+      }
+
+      level = nextLevel;
+    }
+
+    return level.get(0);
+  }
+
+  // Both sides nested, always. Un-grouped, AND-over-OR precedence lets an OR operand escape its
+  // junction and widen the match silently. Do not "simplify" to nesting only the OR side: which
+  // side needs grouping depends on the parent, which this method cannot see.
+  private static org.springframework.data.relational.core.sql.Condition combine(
+      Junction.Operator operator,
+      org.springframework.data.relational.core.sql.Condition left,
+      org.springframework.data.relational.core.sql.Condition right) {
+
+    org.springframework.data.relational.core.sql.Condition groupedLeft = Conditions.nest(left);
+    org.springframework.data.relational.core.sql.Condition groupedRight = Conditions.nest(right);
+
+    return switch (operator) {
+      case AND -> groupedLeft.and(groupedRight);
+      case OR -> groupedLeft.or(groupedRight);
     };
   }
 
   // Nested for the same reason a junction's operands are: NOT binds tighter than AND, so an
   // un-grouped conjunction underneath would be negated in its first term only.
   private org.springframework.data.relational.core.sql.Condition translateNegation(
-      Negation negation, RenderPass pass) {
+      Negation negation, RenderPass pass, int depth) {
 
-    return Conditions.not(Conditions.nest(translate(negation.condition(), pass)));
+    int negatedDepth = depth + 1;
+    requireWithinDepth(negatedDepth);
+
+    return Conditions.not(Conditions.nest(translate(negation.condition(), pass, negatedDepth)));
   }
 
   // Only markers reach the fragment text; values go through the bind path, which is what keeps a

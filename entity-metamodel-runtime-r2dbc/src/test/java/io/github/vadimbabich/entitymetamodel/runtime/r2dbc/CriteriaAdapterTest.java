@@ -58,6 +58,75 @@ class CriteriaAdapterTest {
         .withMessageContaining("nowhere");
   }
 
+  @Test
+  void sameOperatorGroupsNestedPastTheRenderedDepthLimitStillRenderBecauseTheyFlatten() {
+    CriteriaDefinition deeplyGroupedConjunction =
+        groupsNested(DeepConditions.SUPPORTED_NESTING + 1);
+
+    RenderedStatement statement = accountsMatching(deeplyGroupedConjunction);
+
+    assertThat(statement.values()).hasSize(DeepConditions.SUPPORTED_NESTING + 2);
+  }
+
+  @Test
+  void alternatingGroupsAreBoundedByTheRenderedDepthNotByTheGroupCount() {
+    CriteriaDefinition atTheRenderedLimit = alternatingGroupsNested(DeepConditions.SUPPORTED_NESTING);
+    CriteriaDefinition onePastTheRenderedLimit =
+        alternatingGroupsNested(DeepConditions.SUPPORTED_NESTING + 1);
+
+    assertThat(accountsMatching(atTheRenderedLimit).values())
+        .hasSize(DeepConditions.SUPPORTED_NESTING + 1);
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> accountsMatching(onePastTheRenderedLimit))
+        .withMessageContaining("depth")
+        .withMessageContaining(String.valueOf(DeepConditions.SUPPORTED_NESTING + 1));
+  }
+
+  @Test
+  void groupsNestedPastTheAdaptersOwnLimitAreRefusedNamingGroupsNotDepth() {
+    CriteriaDefinition onePastTheLimit = groupsNested(CriteriaAdapter.MAX_GROUP_NESTING + 1);
+
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> adapter.toCondition(onePastTheLimit, ACCOUNT))
+        .withMessageContaining("group")
+        .withMessageContaining(String.valueOf(CriteriaAdapter.MAX_GROUP_NESTING + 1))
+        .withMessageContaining(String.valueOf(CriteriaAdapter.MAX_GROUP_NESTING))
+        .withMessageNotContaining("account_id")
+        .withMessageNotContaining("depth");
+  }
+
+  @Test
+  void groupsNestedExactlyToTheAdaptersOwnLimitAreAdapted() {
+    CriteriaDefinition atTheLimit = groupsNested(CriteriaAdapter.MAX_GROUP_NESTING);
+
+    assertThat(adapter.toCondition(atTheLimit, ACCOUNT)).isPresent();
+  }
+
+  private static CriteriaDefinition alternatingGroupsNested(int groups) {
+    Criteria nested = Criteria.where("id").is(1L);
+
+    for (int level = 1; level <= groups; level++) {
+      Criteria wrapper = Criteria.where("id").is((long) level);
+      if (level % 2 == 0) {
+        nested = wrapper.and(nested);
+      } else {
+        nested = wrapper.or(nested);
+      }
+    }
+
+    return nested;
+  }
+
+  private static CriteriaDefinition groupsNested(int groups) {
+    Criteria nested = Criteria.where("id").is(1L);
+
+    for (int wrapped = 0; wrapped < groups; wrapped++) {
+      nested = Criteria.where("id").is(1L).and(nested);
+    }
+
+    return nested;
+  }
+
   private RenderedStatement accountsMatching(CriteriaDefinition criteria) {
     Condition filter = adapter.toCondition(criteria, ACCOUNT).orElseThrow();
 
@@ -198,9 +267,9 @@ class CriteriaAdapterTest {
 
     assertThat(statement.sql())
         .endsWith(
-            "WHERE (\"account\".\"account_id\" = $1)"
-                + " OR ((\"account\".\"owner_email\" = $2)"
-                + " OR (\"account\".\"state\" = $3))");
+            "WHERE ((\"account\".\"account_id\" = $1)"
+                + " OR (\"account\".\"owner_email\" = $2))"
+                + " OR (\"account\".\"state\" = $3)");
   }
 
   @Test
@@ -215,9 +284,9 @@ class CriteriaAdapterTest {
 
     assertThat(statement.sql())
         .endsWith(
-            "WHERE (\"account\".\"account_id\" = $1)"
-                + " AND ((\"account\".\"owner_email\" = $2)"
-                + " AND (\"account\".\"state\" = $3))");
+            "WHERE ((\"account\".\"account_id\" = $1)"
+                + " AND (\"account\".\"owner_email\" = $2))"
+                + " AND (\"account\".\"state\" = $3)");
   }
 
   @Test
