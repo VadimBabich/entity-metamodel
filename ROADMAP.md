@@ -44,9 +44,10 @@ binding layer would add, and the budget is the half a caller with no web layer i
 most. That half is warranted by the doors that ship
 today, so it is not gated on demand the way the module is.
 
-**What stands between `2.0.0-RC1` and `2.0.0`:** a soak on the candidate; the first compatibility-gate
-run against a published baseline, reviewed rather than assumed; the marker-contract raises entering
-the API ledger; and the post-release checklist. The candidate was published whole — it generates a
+**What stands between `2.0.0-RC1` and `2.0.0`:** a soak on the candidate, and the post-release checklist.
+The first compatibility-gate run against the published baseline has been reviewed, and the marker
+contract — `@RawSql` on the raw doors, both markers' retention — is held by the API ledger as well as
+by tests. The candidate was published whole — it generates a
 metamodel, builds a query and executes it — because Central is permanent and a milestone of parts
 nobody can use would have been permanent too. The 1.x plugin has been removed. It emitted into Spring's own packages, which is the defect 2.x
 exists to remove; the surviving shape is pinned by a committed corpus of golden files so it cannot

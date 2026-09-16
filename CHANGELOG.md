@@ -2,7 +2,15 @@
 
 ## Unreleased
 
-Nothing yet.
+The marker contract is now held by the API ledger as well as by tests. `entity-metamodel-runtime`'s
+Revapi configuration raises `java.annotation.removed` on `@RawSql` and
+`java.annotation.attributeValueChanged` on `@Retention` to `error`, so a raw door losing its marker, or
+either marker changing retention, fails the build against the published `2.0.0-RC1` baseline — where
+before publication only the tests held that, since annotation differences are otherwise demoted below
+the failure threshold. Verified in six legs: the unmodified tree green; a door stripped of `@RawSql` red,
+naming the method; `@RawSql`'s retention flipped red, naming the type; `@Generated`'s retention flipped
+red, naming that type; an unrelated annotation removed from `@Generated` green, so the scoping is real;
+and a mis-typed attachment key shown to widen the raise rather than silence it.
 
 ## 2.0.0-RC1 — 2026-09-16
 
