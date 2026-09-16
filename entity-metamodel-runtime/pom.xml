@@ -15,12 +15,11 @@
     Resolution core of the entity metamodel: EntityRef and PropertyRef (pure data, instance-scoped
     aliases, value equality), name resolution through Spring's mapping context, and the owned
     Generated and RawSql markers. Contains no Spring component, no configuration, and no static
-    mutable state — consumers wire one executor bean themselves (D3).
+    mutable state — consumers wire one executor bean themselves.
   </description>
 
   <dependencies>
-    <!-- The dependency surface is deliberate: the resolution core is RELATIONAL-ONLY.
-         spring-data-r2dbc belongs to the execution module, never here. -->
+    <!-- Relational only: spring-data-r2dbc belongs to the execution module, never here. -->
     <dependency>
       <groupId>org.springframework.data</groupId>
       <artifactId>spring-data-relational</artifactId>
@@ -58,26 +57,41 @@
           <analysisConfiguration>
             <revapi.differences>
               <differences>
-                <!-- Order is load-bearing: the recipe transform is first-match-wins, so the admit
-                     must precede the raise or it would never apply. The admit is a namespace
-                     rather than a type list because the check reports the whole closure one
-                     exposed class drags in - RelationalMappingContext alone pulls Spring's
-                     mapping, SpEL and asm graphs. Per-type policy lives in
-                     ArchitectureRulesTest. -->
+                <!-- First-match-wins, so the admit must precede the raise. A namespace, not a
+                     type list: the check reports the whole closure an exposed class drags in.
+                     Per-type policy lives in ArchitectureRulesTest. -->
                 <item>
                   <ignore>true</ignore>
                   <regex>true</regex>
                   <code>java\.class\.externalClassExposedInAPI</code>
                   <new>(class|interface|enum|@interface) org\.springframework\..*</new>
-                  <justification>The substrate range ADR admits relational.core.mapping on this
-                    module's surface (PropertyRef.columnName); everything else springframework
-                    here is that type's own signature closure.</justification>
+                  <justification>relational.core.mapping is admitted on this module's surface
+                    (PropertyRef.columnName); everything else springframework here is that type's
+                    own signature closure.</justification>
                 </item>
                 <item>
                   <code>java.class.externalClassExposedInAPI</code>
                   <criticality>error</criticality>
                   <justification>Any non-substrate dependency type reaching the public surface is
                     a leak; nothing else is admitted.</justification>
+                </item>
+                <!-- Annotation differences are otherwise silent: this reactor demotes them to
+                     highlight. Scoped by the bare attachment key, not old/new regex: a typo here
+                     widens the raise and fails loudly, where a bad regex leaves a dead gate. -->
+                <item>
+                  <code>java.annotation.removed</code>
+                  <annotationType>io.github.vadimbabich.entitymetamodel.runtime.RawSql</annotationType>
+                  <criticality>error</criticality>
+                  <justification>@RawSql is the machine-findable contract on the raw doors; a door
+                    losing it stops being visible to the checker and to consumers as raw.</justification>
+                </item>
+                <item>
+                  <code>java.annotation.attributeValueChanged</code>
+                  <annotationType>java.lang.annotation.Retention</annotationType>
+                  <criticality>error</criticality>
+                  <justification>Retention is part of both markers' contract: RUNTIME for @RawSql so a
+                    checker can see it, CLASS for @Generated so it never reaches a consumer's runtime.
+                    A change is a break, not a tidy-up.</justification>
                 </item>
               </differences>
             </revapi.differences>

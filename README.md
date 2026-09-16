@@ -390,9 +390,10 @@ delegated Maven or Gradle build is the reliable path today.
 
 `2.0.0-RC1` is the first release, and it went out whole — a version that generates a metamodel,
 builds a query and executes it, because Central is permanent and a milestone of parts would have
-been permanent too. What stands between the candidate and `2.0.0` is a soak: the first
-compatibility-gate run against a published baseline, reviewed rather than assumed, and the
-marker-contract raises entering the API ledger. [`ROADMAP.md`](ROADMAP.md) has the order.
+been permanent too. What stands between the candidate and `2.0.0` is a soak. The
+compatibility gate already runs against the published candidate, and the marker contract — `@RawSql`
+on the raw doors, both markers' retention — is held by the API ledger as well as by tests.
+[`ROADMAP.md`](ROADMAP.md) has the order.
 
 Each release is signed, carries a CycloneDX SBOM and attests its build provenance, so a jar from
 Central can be checked against the exact workflow run and commit that built it:
