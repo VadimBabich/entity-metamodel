@@ -92,7 +92,7 @@
          driven through r2dbc-postgresql. Never compile-scope. -->
     <testcontainers.version>2.0.5</testcontainers.version>
     <r2dbc-postgresql.version>1.1.3.RELEASE</r2dbc-postgresql.version>
-    <r2dbc-proxy.version>1.1.6.RELEASE</r2dbc-proxy.version>
+    <r2dbc-proxy.version>1.1.7.RELEASE</r2dbc-proxy.version>
     <blockhound.version>1.0.17.RELEASE</blockhound.version>
     <netty.version>4.1.139.Final</netty.version>
   </properties>
