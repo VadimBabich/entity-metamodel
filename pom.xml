@@ -64,7 +64,7 @@
     <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
     <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
     <maven-surefire-plugin.version>3.6.1</maven-surefire-plugin.version>
-    <maven-failsafe-plugin.version>3.6.0</maven-failsafe-plugin.version>
+    <maven-failsafe-plugin.version>3.6.1</maven-failsafe-plugin.version>
     <revapi-maven-plugin.version>0.15.1</revapi-maven-plugin.version>
     <revapi-java.version>0.28.4</revapi-java.version>
     <versions-maven-plugin.version>2.23.0</versions-maven-plugin.version>
